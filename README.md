@@ -25,8 +25,19 @@ pip install -e .
 
 Quick start
 -----------
-- Double-click `run_uecfg.bat` or execute it from PowerShell/CMD to run a default scan without setting up virtual environments.
-- Pass additional arguments (for example `run_uecfg.bat --phase 0 --json report.json`) and they will be forwarded to the underlying CLI.
+- Double-click `run_uecfg.bat` to run the default scan; the launcher prints a timestamped header, shows the chosen Python interpreter, and pauses at the end so you can read the output before closing.
+- When running from an existing terminal (PowerShell/CMD/Git Bash) or CI system, disable the pause by either passing `--no-pause` (batch-only flag) or exporting `UECFG_NO_PAUSE=1`. Use `--pause` to force the pause even if the environment variable is set.
+- All additional arguments are forwarded to `uecfg scan`, so you can run smoke checks directly:
+
+```
+run_uecfg.bat --phase 0 --no-color
+run_uecfg.bat --no-pause --phase 0 --no-color
+run_uecfg.bat --phase 0 --json artifacts\ue-scan.json
+```
+
+- The first two commands above are quick smoke checks to verify the launcher works with and without the pause behavior enabled.
+
+- For unattended validation, capture JSON and logs in one go. For interactive discovery, simply double-click and follow the prompts.
 
 CLI overview
 ------------
