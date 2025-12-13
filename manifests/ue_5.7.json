@@ -1,0 +1,56 @@
+{
+  "$schema": "./schema.json",
+  "id": "ue_5.7",
+  "ue_version": "5.7",
+  "notes": "UE 5.7 switches the default MSVC toolchain to 14.44 (VS 2022 17.8+).",
+  "visual_studio": {
+    "required_major": 17,
+    "min_build": "17.8.0",
+    "requires_components": [
+      "Microsoft.VisualStudio.Workload.NativeDesktop",
+      "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+      "Microsoft.VisualStudio.Component.Windows10SDK.22621",
+      "Microsoft.VisualStudio.Component.VC.CMake.Project"
+    ],
+    "notes": "Install via VS Installer with Desktop development with C++ workload."
+  },
+  "msvc": {
+    "toolset_family": "14.44",
+    "notes": "Matches Epic's UE 5.7 release notes."
+  },
+  "windows_sdk": {
+    "preferred_versions": [
+      "10.0.22621.0",
+      "10.0.22000.0"
+    ],
+    "minimum_version": "10.0.19041.0",
+    "notes": "UE 5.7 build targets Windows 10/11 SDKs."
+  },
+  "extras": {
+    "cmake": {
+      "required": true,
+      "winget_id": "Kitware.CMake",
+      "notes": "Required when exporting projects or building with CMake."
+    },
+    "ninja": {
+      "required": true,
+      "winget_id": "Ninja-build.Ninja",
+      "notes": "Speeds up local C++ builds and automation."
+    },
+    "dotnet": {
+      "required": true,
+      "winget_id": "Microsoft.DotNet.SDK.8",
+      "min_version": "6.0",
+      "notes": "Used by UE tooling and Horde agents."
+    },
+    "git": {
+      "required": true,
+      "winget_id": "Git.Git",
+      "notes": "Needed for fetching UE dependencies."
+    }
+  },
+  "horde_uba": {
+    "recommended": true,
+    "notes": "Builders should enable Horde agent + UBA for shared environments."
+  }
+}

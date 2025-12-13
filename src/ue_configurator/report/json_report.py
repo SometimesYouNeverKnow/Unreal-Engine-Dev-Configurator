@@ -15,6 +15,7 @@ def write_json(scan: ScanData, path: str) -> None:
     phase_scores = scan.readiness_scores()
     document = {
         "metadata": scan.metadata,
+        "profile": scan.profile.value,
         "readiness": {
             "total": scan.total_score(),
             "perPhase": {str(phase): phase_scores.get(phase, 0.0) for phase in sorted(scan.results)},
@@ -27,6 +28,7 @@ def write_json(scan: ScanData, path: str) -> None:
             }
             for phase, checks in sorted(scan.results.items())
         ],
+        "phaseModes": {str(phase): mode for phase, mode in scan.phase_modes.items()},
         "recommendedActions": [
             {"id": action.id, "description": action.description, "commands": action.commands}
             for action in actions

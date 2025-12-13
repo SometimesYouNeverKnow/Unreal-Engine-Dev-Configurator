@@ -1,0 +1,114 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "UE Toolchain Manifest",
+  "type": "object",
+  "required": [
+    "id",
+    "ue_version",
+    "visual_studio",
+    "msvc",
+    "windows_sdk",
+    "extras"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^ue_[0-9]+\\.[0-9]+$"
+    },
+    "ue_version": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "visual_studio": {
+      "type": "object",
+      "required": ["required_major"],
+      "properties": {
+        "required_major": {
+          "type": "integer",
+          "minimum": 15
+        },
+        "min_build": {
+          "type": "string"
+        },
+        "max_build": {
+          "type": "string"
+        },
+        "requires_components": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "msvc": {
+      "type": "object",
+      "required": ["toolset_family"],
+      "properties": {
+        "toolset_family": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "windows_sdk": {
+      "type": "object",
+      "properties": {
+        "preferred_versions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "minimum_version": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "extras": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "required": {
+            "type": "boolean"
+          },
+          "winget_id": {
+            "type": "string"
+          },
+          "min_version": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          }
+        },
+        "required": ["required"]
+      }
+    },
+    "horde_uba": {
+      "type": "object",
+      "properties": {
+        "recommended": {
+          "type": "boolean"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

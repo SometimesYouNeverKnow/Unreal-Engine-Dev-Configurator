@@ -8,13 +8,15 @@ import os
 import platform
 import shutil
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from .base import ActionRecommendation, CheckResult, CheckStatus, ProbeContext
 
 
 DISK_WARN_BYTES = 250 * 1024**3  # 250 GB recommended for UE source builds
 RAM_WARN_BYTES = 32 * 1024**3
+RAM_SLACK_BYTES = int(30.5 * 1024**3)
+RAM_FAIL_BYTES = 24 * 1024**3
 CPU_WARN_COUNT = 8
 
 
@@ -180,33 +182,75 @@ def _get_total_ram_bytes() -> int:
     return int(stat.ullTotalPhys)
 
 
+def _get_installed_ram_bytes() -> int:
+    kernel32 = getattr(getattr(ctypes, "windll", None), "kernel32", None)
+    if kernel32 is None or not hasattr(kernel32, "GetPhysicallyInstalledSystemMemory"):
+        return 0
+    mem_kb = ctypes.c_ulonglong(0)
+    success = kernel32.GetPhysicallyInstalledSystemMemory(ctypes.byref(mem_kb))
+    if not success:  # pragma: no cover - defensive
+        return 0
+    return int(mem_kb.value) * 1024
+
+
 def check_hardware_profile(ctx: ProbeContext) -> CheckResult:
     cores = os.cpu_count() or 1
-    ram_bytes = _get_total_ram_bytes()
-    ram_gb = ram_bytes / 1024**3 if ram_bytes else 0
-    cpu_status = cores >= CPU_WARN_COUNT
-    ram_status = ram_bytes >= RAM_WARN_BYTES
-    status = CheckStatus.PASS if (cpu_status and ram_status) else CheckStatus.WARN
+    usable_bytes = _get_total_ram_bytes()
+    installed_bytes = _get_installed_ram_bytes()
+    usable_gb = usable_bytes / 1024**3 if usable_bytes else 0
+    installed_gb = installed_bytes / 1024**3 if installed_bytes else 0
+
+    cpu_ok = cores >= CPU_WARN_COUNT
+    ram_status: CheckStatus
+
+    if usable_bytes >= RAM_WARN_BYTES or (
+        installed_bytes >= RAM_WARN_BYTES and usable_bytes >= RAM_SLACK_BYTES
+    ):
+        ram_status = CheckStatus.PASS
+    elif usable_bytes >= RAM_FAIL_BYTES:
+        ram_status = CheckStatus.WARN
+    else:
+        ram_status = CheckStatus.FAIL
+
+    status = CheckStatus.PASS
+    if not cpu_ok or ram_status == CheckStatus.WARN:
+        status = CheckStatus.WARN
+    if ram_status == CheckStatus.FAIL:
+        status = CheckStatus.FAIL
+
     detail_parts = [
         f"CPU cores: {cores} (recommend >= {CPU_WARN_COUNT})",
-        f"RAM: {ram_gb:.1f} GB (recommend >= {RAM_WARN_BYTES/1024**3:.0f} GB)",
     ]
+    ram_detail = f"RAM usable: {usable_gb:.1f} GB"
+    if installed_bytes:
+        ram_detail += f" / installed: {installed_gb:.1f} GB"
+    ram_detail += f" (recommend >= {RAM_WARN_BYTES/1024**3:.0f} GB installed)"
+    detail_parts.append(ram_detail)
+
+    evidence = [
+        f"cores={cores}",
+        f"usable_bytes={usable_bytes}",
+        f"installed_bytes={installed_bytes}",
+    ]
+
+    actions = []
+    if ram_status != CheckStatus.PASS:
+        actions.append(
+            ActionRecommendation(
+                id="hardware.upgrade",
+                description="Consider adding RAM or using a higher-memory build agent",
+                commands=[],
+            )
+        )
+
     return CheckResult(
         id="os.hardware",
         phase=0,
         status=status,
-        summary=f"{cores} cores / {ram_gb:.1f} GB RAM",
+        summary=f"{cores} cores / {usable_gb:.1f} GB usable RAM",
         details="; ".join(detail_parts),
-        evidence=detail_parts,
-        actions=[
-            ActionRecommendation(
-                id="hardware.upgrade",
-                description="Consider upgrading RAM/CPU or using a beefier build machine",
-                commands=[],
-            )
-        ]
-        if status == CheckStatus.WARN
-        else [],
+        evidence=evidence,
+        actions=actions,
     )
 
 

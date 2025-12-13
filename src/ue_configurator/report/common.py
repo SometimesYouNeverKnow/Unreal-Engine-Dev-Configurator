@@ -17,6 +17,7 @@ class ConsoleTheme:
         CheckStatus.WARN: "33",
         CheckStatus.FAIL: "31",
         CheckStatus.SKIP: "36",
+        CheckStatus.NA: "90",
     }
 
     def __init__(self, *, no_color: bool = False):
@@ -43,7 +44,7 @@ def collect_actions(results: Dict[int, List[CheckResult]]) -> List[ActionRecomme
     unique: Dict[str, ActionRecommendation] = {}
     for checks in results.values():
         for check in checks:
-            if check.status == CheckStatus.PASS:
+            if check.status in (CheckStatus.PASS, CheckStatus.NA):
                 continue
             for action in check.actions:
                 if action.id not in unique:

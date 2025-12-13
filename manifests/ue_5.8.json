@@ -1,0 +1,49 @@
+{
+  "$schema": "./schema.json",
+  "id": "ue_5.8",
+  "ue_version": "5.8",
+  "notes": "Placeholder manifest for upcoming UE 5.8 releases. Values will be tightened once Epic publishes final guidance.",
+  "visual_studio": {
+    "required_major": 17,
+    "min_build": "17.10.0",
+    "requires_components": [
+      "Microsoft.VisualStudio.Workload.NativeDesktop",
+      "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
+    ],
+    "notes": "Treat these as minimums until Epic confirms VS 2026 tooling."
+  },
+  "msvc": {
+    "toolset_family": "14.45",
+    "notes": "Subject to change when UE 5.8 stabilizes."
+  },
+  "windows_sdk": {
+    "preferred_versions": [
+      "10.0.26100.0"
+    ],
+    "minimum_version": "10.0.22621.0",
+    "notes": "Future UE versions may mandate newer 11 SDK builds."
+  },
+  "extras": {
+    "cmake": {
+      "required": true,
+      "winget_id": "Kitware.CMake"
+    },
+    "ninja": {
+      "required": true,
+      "winget_id": "Ninja-build.Ninja"
+    },
+    "dotnet": {
+      "required": true,
+      "winget_id": "Microsoft.DotNet.SDK.8",
+      "notes": "Use the latest LTS SDK."
+    },
+    "git": {
+      "required": true,
+      "winget_id": "Git.Git"
+    }
+  },
+  "horde_uba": {
+    "recommended": true,
+    "notes": "Horde integration details TBD."
+  }
+}

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-import json
 import os
 import subprocess
-import sys
 import threading
-from typing import Any, Callable, Iterable, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TYPE_CHECKING, Union
+
+if TYPE_CHECKING:  # pragma: no cover
+    from ue_configurator.manifest import Manifest
 
 
 class CheckStatus(str, Enum):
@@ -19,6 +20,7 @@ class CheckStatus(str, Enum):
     WARN = "WARN"
     FAIL = "FAIL"
     SKIP = "SKIP"
+    NA = "N/A"
 
 
 @dataclass
@@ -78,6 +80,9 @@ class ProbeContext:
         ue_root: Optional[str] = None,
         timeout: int = 20,
         workdir: Optional[str] = None,
+        profile: str = "workstation",
+        phase_modes: Optional[Dict[int, str]] = None,
+        manifest: Optional["Manifest"] = None,
     ) -> None:
         self.dry_run = dry_run
         self.verbose = verbose
@@ -85,6 +90,9 @@ class ProbeContext:
         self.timeout = timeout
         self.workdir = workdir or os.getcwd()
         self.cache: dict[str, Any] = {}
+        self.profile = profile
+        self.phase_modes = phase_modes or {}
+        self.manifest = manifest
 
     def run_command(
         self,
@@ -132,6 +140,8 @@ def score_checks(checks: Iterable[CheckResult]) -> Tuple[float, int]:
     total = 0.0
     count = 0
     for check in checks:
+        if check.status == CheckStatus.NA:
+            continue
         if check.status == CheckStatus.PASS:
             total += 1.0
         elif check.status == CheckStatus.WARN:

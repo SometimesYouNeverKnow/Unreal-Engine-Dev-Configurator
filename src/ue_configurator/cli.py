@@ -3,13 +3,20 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
+import os
+from pathlib import Path
 import sys
 from typing import Iterable, List, Sequence
 
 from ue_configurator import __version__
 from ue_configurator.fix import horde as horde_fix
+from ue_configurator.fix import toolchain as toolchain_fix
+from ue_configurator.manifest import available_manifests, resolve_manifest
+from ue_configurator.profile import DEFAULT_PHASES, Profile, resolve_profile
+from ue_configurator.setup.pipeline import SetupOptions, run_setup
 from ue_configurator.probe.base import ProbeContext
-from ue_configurator.probe.runner import DEFAULT_PHASES, PHASE_MAP, run_scan
+from ue_configurator.probe.runner import PHASE_MAP, run_scan
 from ue_configurator.report.common import ConsoleTheme, collect_actions
 from ue_configurator.report.console import render_console
 from ue_configurator.report.json_report import write_json
@@ -20,6 +27,16 @@ def _add_global_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", metavar="PATH", help="write machine-readable JSON output")
     parser.add_argument("--verbose", action="store_true", help="show verbose probe details")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
+    parser.add_argument("--ue-version", help="Target Unreal Engine version for manifest compliance (e.g., 5.7)")
+    parser.add_argument(
+        "--manifest",
+        help="Manifest identifier or JSON path describing required toolchain components",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=[profile.value for profile in Profile],
+        help="Machine profile (workstation, agent, minimal). Defaults to workstation or UECFG_PROFILE env.",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,19 +69,49 @@ def build_parser() -> argparse.ArgumentParser:
     _add_global_flags(verify_parser)
     verify_parser.add_argument("--ue-root", required=True, help="UE clone to verify")
 
+    setup_parser = subparsers.add_parser("setup", help="Automated setup wizard")
+    _add_global_flags(setup_parser)
+    setup_parser.add_argument(
+        "--phase",
+        type=int,
+        action="append",
+        choices=list(PHASE_MAP.keys()),
+        help="Restrict setup to selected phases.",
+    )
+    setup_parser.add_argument("--ue-root", help="Path to an Unreal Engine source tree")
+    setup_parser.add_argument("--include-horde", action="store_true", help="Include optional Horde/UBA steps")
+    setup_parser.add_argument("--apply", action="store_true", help="Apply steps without confirmation prompts")
+    setup_parser.add_argument("--plan", action="store_true", help="Print the setup plan then exit")
+    setup_parser.add_argument("--resume", action="store_true", help="Resume from previous setup state")
+    setup_parser.add_argument("--log", help=argparse.SUPPRESS)
+    setup_parser.add_argument("--use-winget", dest="use_winget", action="store_true", help=argparse.SUPPRESS)
+    setup_parser.add_argument("--no-winget", dest="use_winget", action="store_false", help=argparse.SUPPRESS)
+    setup_parser.set_defaults(use_winget=None)
+
     return parser
 
 
-def _resolve_phases(phase_flags: Sequence[int] | None) -> List[int]:
+def _resolve_phases(phase_flags: Sequence[int] | None, profile: Profile) -> List[int]:
     if not phase_flags:
-        return list(DEFAULT_PHASES)
+        return list(DEFAULT_PHASES[profile])
     return [phase for phase in phase_flags if phase in PHASE_MAP]
 
 
 def handle_scan(args: argparse.Namespace) -> int:
-    phases = _resolve_phases(args.phase)
-    ctx = ProbeContext(dry_run=True, verbose=args.verbose, ue_root=args.ue_root)
-    scan = run_scan(phases, ctx)
+    profile = resolve_profile(args.profile)
+    phases = _resolve_phases(args.phase, profile)
+    manifest_res = resolve_manifest(manifest=args.manifest, ue_version=args.ue_version, ue_root=args.ue_root)
+    if manifest_res.manifest is None and (args.manifest or args.ue_version):
+        target = args.manifest or args.ue_version
+        print(f"[manifest] Unable to load manifest '{target}'. Continuing without manifest.")
+    ctx = ProbeContext(
+        dry_run=True,
+        verbose=args.verbose,
+        ue_root=args.ue_root,
+        profile=profile.value,
+        manifest=manifest_res.manifest,
+    )
+    scan = run_scan(phases, ctx, profile)
     theme = ConsoleTheme(no_color=args.no_color)
     render_console(scan, theme=theme, verbose=args.verbose)
     if args.json:
@@ -73,8 +120,19 @@ def handle_scan(args: argparse.Namespace) -> int:
 
 
 def handle_verify(args: argparse.Namespace) -> int:
-    ctx = ProbeContext(dry_run=True, verbose=args.verbose, ue_root=args.ue_root)
-    scan = run_scan([2], ctx)
+    profile = resolve_profile(args.profile)
+    manifest_res = resolve_manifest(manifest=args.manifest, ue_version=args.ue_version, ue_root=args.ue_root)
+    if manifest_res.manifest is None and (args.manifest or args.ue_version):
+        target = args.manifest or args.ue_version
+        print(f"[manifest] Unable to load manifest '{target}'. Continuing without manifest.")
+    ctx = ProbeContext(
+        dry_run=True,
+        verbose=args.verbose,
+        ue_root=args.ue_root,
+        profile=profile.value,
+        manifest=manifest_res.manifest,
+    )
+    scan = run_scan([2], ctx, profile)
     theme = ConsoleTheme(no_color=args.no_color)
     render_console(scan, theme=theme, verbose=True)
     if args.json:
@@ -82,10 +140,131 @@ def handle_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _prompt_bool_cli(prompt: str, default: bool = True) -> bool:
+    default_str = "Y/n" if default else "y/N"
+    while True:
+        response = input(f"{prompt} [{default_str}] ").strip().lower()
+        if not response:
+            return default
+        if response in ("y", "yes"):
+            return True
+        if response in ("n", "no"):
+            return False
+
+
+def _prompt_profile_choice(current: Profile) -> Profile:
+    choices = "/".join(profile.value for profile in Profile)
+    prompt = f"Select profile ({choices}) [{current.value}] "
+    while True:
+        response = input(prompt).strip().lower()
+        if not response:
+            return current
+        for profile in Profile:
+            if profile.value == response:
+                return profile
+
+
+def handle_setup(args: argparse.Namespace) -> int:
+    profile = resolve_profile(args.profile)
+    interactive = sys.stdin.isatty()
+    if args.profile is None and interactive and "UECFG_PROFILE" not in os.environ:
+        profile = _prompt_profile_choice(profile)
+    phases = _resolve_phases(args.phase, profile)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_path = Path(args.log) if args.log else Path("logs") / f"uecfg_setup_{timestamp}.log"
+    json_path = args.json or str(Path("reports") / f"uecfg_report_{timestamp}.json")
+
+    ctx_preview = ProbeContext(dry_run=True, verbose=args.verbose, ue_root=args.ue_root)
+    winget_available = toolchain_fix.winget_available(ctx_preview)
+    use_winget = winget_available if args.use_winget is None else args.use_winget
+    include_horde = args.include_horde
+    ue_root = args.ue_root
+    selected_manifest = args.manifest
+    selected_ue_version = args.ue_version
+
+    apply_flag = args.apply
+
+    if not args.apply and interactive and not args.plan:
+        if winget_available and args.use_winget is None:
+            use_winget = _prompt_bool_cli("winget detected. Use it for installs?", True)
+        elif not winget_available:
+            print("[setup] winget not detected; installs will be manual.")
+        if ue_root is None and profile == Profile.WORKSTATION:
+            response = input("Provide Unreal Engine root path (leave blank to skip): ").strip().strip('"')
+            if response:
+                ue_root = response
+        if selected_manifest is None and not selected_ue_version:
+            manifests = sorted(available_manifests().keys())
+            if manifests:
+                default_manifest = manifests[-1]
+                default_version = default_manifest.split("_", 1)[-1]
+                response = input(
+                    f"Target UE version ({', '.join(m.split('_',1)[-1] for m in manifests)}) [{default_version}]: "
+                ).strip()
+                if response:
+                    selected_ue_version = response
+                else:
+                    selected_ue_version = default_version
+        if not include_horde:
+            include_horde = _prompt_bool_cli("Include optional Horde/UBA steps?", profile == Profile.AGENT)
+        if not args.plan:
+            consent = _prompt_bool_cli(
+                "Setup may install Git, CMake, Ninja, and .NET SDK via winget. Proceed?", True
+            )
+            if not consent:
+                print("[setup] Setup cancelled.")
+                return 1
+            apply_flag = True
+        else:
+            apply_flag = False
+    elif not args.apply and not interactive and not args.plan:
+        if not args.plan:
+            print("[setup] Non-interactive session detected. Re-run with --apply to execute steps.")
+        apply_flag = False
+
+    manifest_res = resolve_manifest(manifest=selected_manifest, ue_version=selected_ue_version, ue_root=ue_root)
+    if manifest_res.manifest is None and (selected_manifest or selected_ue_version):
+        target = selected_manifest or selected_ue_version
+        print(f"[manifest] Unable to load manifest '{target}'. Continuing without manifest.")
+    options = SetupOptions(
+        phases=phases,
+        apply=apply_flag and not args.plan,
+        resume=args.resume,
+        plan_only=args.plan,
+        include_horde=include_horde,
+        use_winget=use_winget,
+        ue_root=ue_root,
+        dry_run=args.dry_run,
+        verbose=args.verbose,
+        no_color=args.no_color,
+        json_path=json_path,
+        log_path=log_path,
+        manifest=manifest_res.manifest,
+        manifest_source=manifest_res.source,
+        ue_version=selected_ue_version
+        or manifest_res.detected_version
+        or (manifest_res.manifest.ue_version if manifest_res.manifest else None),
+        manifest_arg=selected_manifest,
+        profile=profile,
+    )
+    return run_setup(options)
+
+
 def handle_fix(args: argparse.Namespace) -> int:
-    phases = _resolve_phases([args.phase])
-    ctx = ProbeContext(dry_run=True, verbose=args.verbose, ue_root=args.ue_root)
-    scan = run_scan(phases, ctx)
+    profile = resolve_profile(args.profile)
+    phases = _resolve_phases([args.phase], profile)
+    manifest_res = resolve_manifest(manifest=args.manifest, ue_version=args.ue_version, ue_root=args.ue_root)
+    if manifest_res.manifest is None and (args.manifest or args.ue_version):
+        target = args.manifest or args.ue_version
+        print(f"[manifest] Unable to load manifest '{target}'. Continuing without manifest.")
+    ctx = ProbeContext(
+        dry_run=True,
+        verbose=args.verbose,
+        ue_root=args.ue_root,
+        profile=profile.value,
+        manifest=manifest_res.manifest,
+    )
+    scan = run_scan(phases, ctx, profile)
     actions = collect_actions(scan.results)
     if not actions:
         print("No actionable recommendations for this phase.")
@@ -98,9 +277,17 @@ def handle_fix(args: argparse.Namespace) -> int:
 
     if args.apply:
         apply_ctx = ProbeContext(
-            dry_run=args.dry_run or not args.apply, verbose=args.verbose, ue_root=args.ue_root
+            dry_run=args.dry_run or not args.apply,
+            verbose=args.verbose,
+            ue_root=args.ue_root,
+            profile=profile.value,
+            manifest=manifest_res.manifest,
         )
-        if args.phase == 3:
+        if args.phase == 1:
+            outcome = toolchain_fix.ensure_toolchain_extras(apply_ctx)
+            for line in outcome.logs:
+                print(line)
+        elif args.phase == 3:
             target = horde_fix.generate_build_configuration(apply_ctx, destination=args.destination)
             if apply_ctx.dry_run:
                 print(f"[dry-run] Would create BuildConfiguration.xml at {target}")
@@ -125,6 +312,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return handle_verify(args)
     if args.command == "fix":
         return handle_fix(args)
+    if args.command == "setup":
+        return handle_setup(args)
     parser.error("Unknown command")
     return 1
 

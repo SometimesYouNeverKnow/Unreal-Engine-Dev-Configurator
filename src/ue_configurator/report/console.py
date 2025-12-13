@@ -24,6 +24,11 @@ def render_console(scan: ScanData, *, theme: ConsoleTheme, verbose: bool = False
     header = f"{metadata.get('machine', '<machine>')} — {metadata.get('timestamp', '')}"
     print(header)
     print("-" * min(len(header), width))
+    manifest_id = metadata.get("manifestId")
+    if manifest_id:
+        fingerprint = metadata.get("manifestFingerprint", "")[:12]
+        ue_version = metadata.get("ueVersion", "")
+        print(f"Manifest: {manifest_id} (UE {ue_version}) — fingerprint {fingerprint}")
 
     for phase in sorted(scan.results):
         phase_name, _ = PHASE_MAP[phase]
@@ -31,8 +36,12 @@ def render_console(scan: ScanData, *, theme: ConsoleTheme, verbose: bool = False
         phase_score, _ = score_checks(checks)
         completed = len([c for c in checks if c.status == CheckStatus.PASS])
         progress = theme.progress_bar(completed, len(checks))
-        print(f"{phase_name} ({phase_score:.0f}/100)")
-        print(progress)
+        mode = scan.phase_modes.get(phase, "required")
+        if mode == "na":
+            print(f"{phase_name} — N/A for {scan.profile.value} profile")
+        else:
+            print(f"{phase_name} ({phase_score:.0f}/100)")
+            print(progress)
         for check in checks:
             status = theme.status_label(check.status)
             print(f" - {status} {check.summary}")
@@ -45,6 +54,10 @@ def render_console(scan: ScanData, *, theme: ConsoleTheme, verbose: bool = False
     total_score = scan.total_score()
     print(f"Final readiness: {total_score:.0f}/100")
     for phase, checks in scan.results.items():
+        mode = scan.phase_modes.get(phase, "required")
+        if mode == "na":
+            print(f"  Phase {phase}: N/A ({scan.profile.value} profile)")
+            continue
         phase_score, _ = score_checks(checks)
         print(f"  Phase {phase}: {phase_score:.0f}/100")
 
