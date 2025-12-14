@@ -56,6 +56,7 @@ Double-click Setup
   4. Elevate via UAC if installs are requested.
   5. Execute the plan, stream logs to `logs\uecfg_setup_<timestamp>.log`, resume from `.uecfg_state.json` if rerun, and save a JSON report to `reports\uecfg_report_<timestamp>.json`.
 - Setup greets interactive users with a short tongue-in-cheek ASCII skull splash. Skip it with `uecfg setup --no-splash` (or pass `--no-splash` to `run_setup.bat`) or set `UECFG_NO_SPLASH=1` for scripting environments.
+- When a UE manifest is selected (`--ue-version 5.7` or `--manifest ...`), setup can modify Visual Studio automatically by generating a `.vsconfig` and running the official installer (`setup.exe modify --config ...`). Consent + elevation are required, and you can force the UI with `--vs-interactive`.
 - From any shell you can run the same workflow with more control:
 
 ```powershell
@@ -108,16 +109,17 @@ uecfg setup [--phase ...] [--plan] [--apply] [--resume] [--ue-root <path>] [--ue
 ```
 
 - `scan` runs audit probes. By default phases 0-2 execute; include `--phase 3` to opt into the Horde/UBA checks. Add `--ue-version 5.7` (or `--manifest manifests\ue_5.7.json`) to require manifest compliance.
-- `fix` surfaces recommended actions for the requested phase and, when `--apply` is present, performs guarded helpers such as generating Horde templates. Without `--apply`, commands are only printed.
+- `fix` surfaces recommended actions for the requested phase and, when `--apply` is present, performs guarded helpers such as generating Horde templates or modifying Visual Studio to match a manifest. Without `--apply`, commands are only printed. Use `--vs-interactive` if you want the Visual Studio Installer UI instead of the passive mode.
 - `verify` focuses on a provided Unreal Engine source root and ensures `Setup.bat`, `GenerateProjectFiles.bat`, and redist installers are ready to run.
-- `setup` orchestrates scans, installs, confirmations, elevation, and resume-friendly state tracking. Use `--plan` to see the plan, `--apply` to skip prompts, and `--resume` to continue after manual steps. When `--ue-version` is present (or detected), every step references the manifest so reruns stay deterministic.
+- `setup` orchestrates scans, installs, confirmations, elevation, and resume-friendly state tracking. Use `--plan` to see the plan, `--apply` to skip prompts, and `--resume` to continue after manual steps. When `--ue-version` is present (or detected), every step references the manifest so reruns stay deterministic. Control Visual Studio Installer mode with `--vs-interactive` / `--vs-passive`.
 
 Every command accepts `--dry-run` (default) to prevent writes, `--json <path>` to emit machine logs, `--verbose` for detailed evidence, and `--no-color` to disable ANSI styling.
 
 Auto-fix (Phase 1)
 ------------------
 - **What it fixes automatically:** Missing Git, CMake, Ninja, and Microsoft .NET SDK can be installed via `winget` when you confirm either in `uecfg fix --phase 1 --apply` or during the setup wizard. Everything honours `--dry-run`.
-- **What stays manual/guided:** Visual Studio workloads, Windows SDKs, and Unreal Engine source sync remain guided - uecfg prints precise `vs_installer.exe` commands or `Setup.bat` instructions and lets you resume once they're done.
+- **Visual Studio via manifest:** `uecfg fix --phase 1 --ue-version 5.7 --apply` (or the setup wizard with a selected manifest) will generate a `.vsconfig`, locate `setup.exe`, and run `setup.exe modify --config ...` automatically. Use `--vs-interactive` if you prefer to watch the installer UI.
+- **What stays manual/guided:** Windows SDK-only installs and Unreal Engine source sync remain guided - uecfg prints precise command lines (`Setup.bat`, etc.) and lets you resume once they're done.
 - **Dry-run previews:** `uecfg fix --phase 1 --dry-run` (or the setup wizard in dry-run mode) prints `[dry-run] Would run: ...` so you can copy/paste the exact winget command or hand it to IT.
 - **winget missing-** The fixer detects that scenario and prints manual instructions rather than failing.
 - **Admin expectations:** Installing packages requires an elevated PowerShell window (UAC prompt). If you stay non-elevated, the fixer reminds you to re-run with elevation.
@@ -137,7 +139,8 @@ Troubleshooting
 What gets installed vs guided
 -----------------------------
 - **Automated via winget (with consent):** Git (`Git.Git`), CMake (`Kitware.CMake`), Ninja (`Ninja-build.Ninja`), Microsoft .NET SDK (`Microsoft.DotNet.SDK.8`), Unreal prerequisites installer (`UEPrereqSetup_x64.exe`), and the Horde `BuildConfiguration.xml` template.
-- **Guided/manual:** Visual Studio workloads, Windows SDKs, UE `Setup.bat` / `GenerateProjectFiles.bat` syncs (uecfg can execute them for you but still shows the commands), and Horde/UBA services. When automation isn't possible, the setup wizard marks the step as BLOCKED, prints exact commands, and lets you resume once the manual work is finished.
+- **Automated via Visual Studio Installer:** When a manifest is selected, `setup`/`fix` generate a `.vsconfig` and run `setup.exe modify --installPath <...> --config <...>` to add missing workloads/components (defaults to `--passive`, opt into UI with `--vs-interactive`).
+- **Guided/manual:** Windows SDK-only additions, UE `Setup.bat` / `GenerateProjectFiles.bat` syncs (uecfg can execute them for you but still shows the commands), and Horde/UBA services. When automation isn't possible, the setup wizard marks the step as BLOCKED, prints exact commands, and lets you resume once the manual work is finished.
 
 How it works
 ------------

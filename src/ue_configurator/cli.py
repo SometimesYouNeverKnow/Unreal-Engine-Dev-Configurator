@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 from datetime import datetime
 import os
 from pathlib import Path
+import shlex
 import sys
 from typing import Iterable, List, Sequence
 
 from ue_configurator import __version__
 from ue_configurator.fix import horde as horde_fix
 from ue_configurator.fix import toolchain as toolchain_fix
+from ue_configurator.fix import visual_studio as vs_fix
 from ue_configurator.manifest import available_manifests, resolve_manifest
 from ue_configurator.profile import DEFAULT_PHASES, Profile, resolve_profile
 from ue_configurator.setup.pipeline import SetupOptions, run_setup
@@ -64,6 +67,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--destination",
         help="Custom destination for generated config files (phase 3 helpers)",
     )
+    fix_parser.add_argument(
+        "--vs-passive",
+        dest="vs_passive",
+        action="store_true",
+        help="Run Visual Studio Installer in passive mode (default).",
+    )
+    fix_parser.add_argument(
+        "--vs-interactive",
+        dest="vs_passive",
+        action="store_false",
+        help="Force the Visual Studio Installer UI when modifying components.",
+    )
+    fix_parser.set_defaults(vs_passive=True)
 
     verify_parser = subparsers.add_parser("verify", help="Verify a UE source tree")
     _add_global_flags(verify_parser)
@@ -87,6 +103,18 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--use-winget", dest="use_winget", action="store_true", help=argparse.SUPPRESS)
     setup_parser.add_argument("--no-winget", dest="use_winget", action="store_false", help=argparse.SUPPRESS)
     setup_parser.add_argument("--no-splash", action="store_true", help="Skip the punk skull splash screen.")
+    setup_parser.add_argument(
+        "--vs-passive",
+        dest="vs_passive",
+        action="store_true",
+        help="Run Visual Studio Installer in passive mode (default).",
+    )
+    setup_parser.add_argument(
+        "--vs-interactive",
+        dest="vs_passive",
+        action="store_false",
+        help="Force the Visual Studio Installer UI during VS component installs.",
+    )
     setup_parser.set_defaults(use_winget=None)
 
     return parser
@@ -231,6 +259,8 @@ def handle_setup(args: argparse.Namespace) -> int:
     no_splash_env = os.environ.get("UECFG_NO_SPLASH") == "1"
     show_splash = bool(interactive and not no_splash_flag and not no_splash_env)
 
+    vs_passive = getattr(args, "vs_passive", True)
+
     options = SetupOptions(
         phases=phases,
         apply=apply_flag and not args.plan,
@@ -250,6 +280,7 @@ def handle_setup(args: argparse.Namespace) -> int:
         or manifest_res.detected_version
         or (manifest_res.manifest.ue_version if manifest_res.manifest else None),
         manifest_arg=selected_manifest,
+        vs_passive=vs_passive,
         show_splash=show_splash,
         no_splash_flag=no_splash_flag,
         profile=profile,
@@ -271,6 +302,7 @@ def handle_fix(args: argparse.Namespace) -> int:
         profile=profile.value,
         manifest=manifest_res.manifest,
     )
+    vs_plan = vs_fix.plan_vs_modify(ctx, manifest_res.manifest)
     scan = run_scan(phases, ctx, profile)
     actions = collect_actions(scan.results)
     if not actions:
@@ -283,6 +315,9 @@ def handle_fix(args: argparse.Namespace) -> int:
                 print(f"    {cmd}")
 
     if args.apply:
+        if args.phase == 1 and vs_plan.required and not args.dry_run and not _is_admin():
+            if _relaunch_fix_elevated(args):
+                return 0
         apply_ctx = ProbeContext(
             dry_run=args.dry_run or not args.apply,
             verbose=args.verbose,
@@ -294,6 +329,17 @@ def handle_fix(args: argparse.Namespace) -> int:
             outcome = toolchain_fix.ensure_toolchain_extras(apply_ctx)
             for line in outcome.logs:
                 print(line)
+            vs_plan = vs_fix.plan_vs_modify(apply_ctx, manifest_res.manifest)
+            if vs_plan.required:
+                vs_outcome = vs_fix.ensure_vs_manifest_components(
+                    apply_ctx,
+                    manifest_res.manifest,
+                    vs_passive=getattr(args, "vs_passive", True),
+                    dry_run=args.dry_run,
+                )
+                for line in vs_outcome.logs:
+                    print(line)
+                print(vs_outcome.message)
         elif args.phase == 3:
             target = horde_fix.generate_build_configuration(apply_ctx, destination=args.destination)
             if apply_ctx.dry_run:
@@ -308,6 +354,54 @@ def handle_fix(args: argparse.Namespace) -> int:
     if args.json:
         write_json(scan, args.json)
     return 0
+
+
+def _reconstruct_fix_args(args: argparse.Namespace) -> List[str]:
+    rebuilt: List[str] = ["-m", "ue_configurator.cli", "fix", "--phase", str(args.phase)]
+    if args.apply:
+        rebuilt.append("--apply")
+    if args.ue_root:
+        rebuilt.extend(["--ue-root", args.ue_root])
+    if getattr(args, "destination", None):
+        rebuilt.extend(["--destination", args.destination])
+    if args.dry_run:
+        rebuilt.append("--dry-run")
+    if args.verbose:
+        rebuilt.append("--verbose")
+    if getattr(args, "no_color", False):
+        rebuilt.append("--no-color")
+    if args.json:
+        rebuilt.extend(["--json", args.json])
+    if args.profile:
+        rebuilt.extend(["--profile", args.profile])
+    if args.manifest:
+        rebuilt.extend(["--manifest", args.manifest])
+    if args.ue_version:
+        rebuilt.extend(["--ue-version", args.ue_version])
+    if not getattr(args, "vs_passive", True):
+        rebuilt.append("--vs-interactive")
+    return rebuilt
+
+
+def _is_admin() -> bool:
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _relaunch_fix_elevated(args: argparse.Namespace) -> bool:
+    cmd = _reconstruct_fix_args(args)
+    params = " ".join(shlex.quote(part) for part in cmd)
+    try:
+        ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+    except Exception as exc:
+        print(f"[fix] Unable to request elevation: {exc}")
+        return False
+    if ret <= 32:
+        print("[fix] Elevation cancelled.")
+        return False
+    return True
 
 
 def main(argv: Sequence[str] | None = None) -> int:

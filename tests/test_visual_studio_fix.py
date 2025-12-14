@@ -1,0 +1,73 @@
+"""Tests for Visual Studio manifest automation."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import subprocess
+
+import pytest
+
+from ue_configurator.fix import visual_studio
+from ue_configurator.manifest import MANIFEST_DIR, load_manifest_from_path
+from ue_configurator.probe.base import ProbeContext
+from ue_configurator.probe.toolchain import VSInstance
+
+
+def test_generate_vsconfig_contains_manifest_components(tmp_path: Path) -> None:
+    manifest = load_manifest_from_path(MANIFEST_DIR / "ue_5.7.json")
+    path = visual_studio.generate_vsconfig(manifest)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    assert "Microsoft.VisualStudio.Workload.NativeDesktop" in data["workloads"]
+    assert "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" in data["components"]
+
+
+def test_plan_vs_modify_detects_missing(monkeypatch) -> None:
+    manifest = load_manifest_from_path(MANIFEST_DIR / "ue_5.7.json")
+    ctx = ProbeContext()
+    fake_instance = VSInstance(
+        display_name="VS",
+        installation_path=Path("C:/VS"),
+        version="17.8.5",
+        product_id="visualstudio",
+        packages=["Microsoft.VisualStudio.Workload.NativeDesktop"],
+    )
+    monkeypatch.setattr(visual_studio, "get_vs_instances", lambda ctx: [fake_instance])
+    plan = visual_studio.plan_vs_modify(ctx, manifest)
+    assert plan.required
+    assert "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" in plan.missing_components
+
+
+def test_modify_vs_install_runs_setup(monkeypatch, tmp_path: Path) -> None:
+    setup_exe = tmp_path / "setup.exe"
+    setup_exe.write_text("", encoding="utf-8")
+    vsconfig = tmp_path / "cfg.vsconfig"
+    vsconfig.write_text("{}", encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    monkeypatch.setattr(visual_studio.tempfile, "mkdtemp", lambda prefix: str(run_dir))
+
+    def fake_run(cmd, cwd, capture_output, text, check):
+        assert cmd[0] == str(setup_exe)
+        assert Path(cwd) == run_dir
+        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    outcome = visual_studio.modify_vs_install(
+        install_path=Path("C:/VS"),
+        setup_exe=setup_exe,
+        vsconfig_path=vsconfig,
+        vs_passive=True,
+        dry_run=False,
+        logger=None,
+    )
+    assert outcome.success
+
+
+def test_ensure_vs_manifest_components_blocked_without_setup(monkeypatch) -> None:
+    manifest = load_manifest_from_path(MANIFEST_DIR / "ue_5.7.json")
+    ctx = ProbeContext()
+    monkeypatch.setattr(visual_studio, "plan_vs_modify", lambda ctx, manifest: visual_studio.VSModifyPlan(True, "missing", None, ["comp"]))
+    monkeypatch.setattr(visual_studio, "find_vs_installer_setup_exe", lambda: None)
+    outcome = visual_studio.ensure_vs_manifest_components(ctx, manifest)
+    assert outcome.blocked

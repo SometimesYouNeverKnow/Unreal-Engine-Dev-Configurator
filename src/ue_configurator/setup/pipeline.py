@@ -19,6 +19,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 from ue_configurator.fix import horde as horde_fix
 from ue_configurator.fix import toolchain as toolchain_fix
+from ue_configurator.fix import visual_studio as vs_fix
 from ue_configurator.profile import DEFAULT_PROFILE, Profile
 from ue_configurator.probe import horde as horde_probe
 from ue_configurator.probe import system as system_probe
@@ -100,6 +101,7 @@ class SetupOptions:
     manifest_arg: Optional[str] = None
     show_splash: bool = True
     no_splash_flag: bool = False
+    vs_passive: bool = True
 
 
 class SetupLogger:
@@ -209,6 +211,22 @@ def build_steps(runtime: SetupRuntime) -> List[SetupStep]:
             )
         )
 
+    if phases_include(1) and options.manifest:
+        vs_plan = vs_fix.plan_vs_modify(ctx, options.manifest)
+        if vs_plan.required:
+            steps.append(
+                SetupStep(
+                    id="vs.manifest",
+                    title="Ensure Visual Studio components (manifest)",
+                    phase=1,
+                    requires_admin=True,
+                    estimated_time=15,
+                    description="Use Visual Studio Installer CLI to add manifest-required workloads/components.",
+                    check=lambda rt: not vs_fix.plan_vs_modify(rt.context, rt.options.manifest).required,
+                    apply=lambda rt: _apply_vs_manifest(rt),
+                )
+            )
+
     if phases_include(1) and _needs_check(runtime.scan, "toolchain.dotnet"):
         steps.append(
             SetupStep(
@@ -229,7 +247,7 @@ def build_steps(runtime: SetupRuntime) -> List[SetupStep]:
             _get_check(runtime.scan, "toolchain.msvc"),
             _get_check(runtime.scan, "toolchain.sdk"),
         ]
-        if any(check and check.status != CheckStatus.PASS for check in vs_checks):
+        if options.manifest is None and any(check and check.status != CheckStatus.PASS for check in vs_checks):
             steps.append(
                 SetupStep(
                     id="guidance.visualstudio",
@@ -301,6 +319,21 @@ def _apply_vs_guidance(runtime: SetupRuntime) -> StepResult:
     )
     runtime.logger.log("Recommended command (elevated CMD): vs_installer.exe modify --add Microsoft.VisualStudio.Workload.NativeDesktop")
     return StepResult(StepStatus.BLOCKED, "Awaiting Visual Studio modifications.")
+
+
+def _apply_vs_manifest(runtime: SetupRuntime) -> StepResult:
+    manifest = runtime.options.manifest
+    if manifest is None:
+        return StepResult(StepStatus.SKIPPED, "No manifest defined.")
+    outcome = vs_fix.ensure_vs_manifest_components(
+        runtime.context,
+        manifest,
+        vs_passive=runtime.options.vs_passive,
+        dry_run=runtime.options.dry_run,
+        logger=runtime.logger,
+    )
+    status = StepStatus.DONE if outcome.success else StepStatus.BLOCKED if outcome.blocked else StepStatus.FAILED
+    return StepResult(status, outcome.message)
 
 
 def _build_unreal_steps(ue_root: str, runtime: SetupRuntime) -> List[SetupStep]:
@@ -545,6 +578,8 @@ def _reconstruct_cli_args(options: SetupOptions) -> List[str]:
         args.append("--apply")
     if options.no_splash_flag:
         args.append("--no-splash")
+    if not options.vs_passive:
+        args.append("--vs-interactive")
     return args
 
 

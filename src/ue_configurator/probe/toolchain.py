@@ -80,7 +80,12 @@ def _discover_vs_instances(ctx: ProbeContext) -> List[VSInstance]:
     return instances
 
 
-def _parse_version_tuple(raw: str) -> Tuple[int, ...]:
+def get_vs_instances(ctx: ProbeContext) -> List[VSInstance]:
+    """Public helper for other modules to reuse vswhere discovery."""
+    return _discover_vs_instances(ctx)
+
+
+def parse_vs_version(raw: str) -> Tuple[int, ...]:
     parts: List[int] = []
     for token in raw.split("."):
         token = token.strip()
@@ -93,7 +98,7 @@ def _parse_version_tuple(raw: str) -> Tuple[int, ...]:
     return tuple(parts)
 
 
-def _compare_versions(left: Tuple[int, ...], right: Tuple[int, ...]) -> int:
+def compare_versions(left: Tuple[int, ...], right: Tuple[int, ...]) -> int:
     max_len = max(len(left), len(right))
     padded_left = left + (0,) * (max_len - len(left))
     padded_right = right + (0,) * (max_len - len(right))
@@ -359,16 +364,16 @@ def _evaluate_visual_studio(manifest: "Manifest", ctx: ProbeContext) -> SectionE
             evidence=["vswhere returned zero instances"],
             actions=[_vs_component_action(vs_req.requires_components)] if vs_req.requires_components else [],
         )
-    min_tuple = _parse_version_tuple(vs_req.min_build or "0")
-    max_tuple = _parse_version_tuple(vs_req.max_build or "999.0.0.0") if vs_req.max_build else None
+    min_tuple = parse_vs_version(vs_req.min_build or "0")
+    max_tuple = parse_vs_version(vs_req.max_build or "999.0.0.0") if vs_req.max_build else None
     candidates: List[Tuple[VSInstance, Tuple[int, ...], List[str]]] = []
     for inst in instances:
-        version_tuple = _parse_version_tuple(inst.version)
+        version_tuple = parse_vs_version(inst.version)
         if not version_tuple or version_tuple[0] != vs_req.required_major:
             continue
-        if vs_req.min_build and _compare_versions(version_tuple, min_tuple) < 0:
+        if vs_req.min_build and compare_versions(version_tuple, min_tuple) < 0:
             continue
-        if max_tuple and _compare_versions(version_tuple, max_tuple) > 0:
+        if max_tuple and compare_versions(version_tuple, max_tuple) > 0:
             continue
         missing = [comp for comp in vs_req.requires_components if comp and comp not in inst.packages]
         candidates.append((inst, version_tuple, missing))
@@ -384,7 +389,7 @@ def _evaluate_visual_studio(manifest: "Manifest", ctx: ProbeContext) -> SectionE
         if len(missing_components) < len(missing):
             best_inst, best_version, missing = inst, version, missing_components
             continue
-        if len(missing_components) == len(missing) and _compare_versions(version, best_version) > 0:
+        if len(missing_components) == len(missing) and compare_versions(version, best_version) > 0:
             best_inst, best_version, missing = inst, version, missing_components
     evidence = [f"{best_inst.display_name} {best_inst.version} @ {best_inst.installation_path}"]
     if not missing:
@@ -466,8 +471,8 @@ def _evaluate_windows_sdk(manifest: "Manifest", ctx: ProbeContext) -> SectionEva
             actions=[],
         )
     if minimum:
-        min_tuple = _parse_version_tuple(minimum)
-        meets_min = any(_compare_versions(_parse_version_tuple(ver), min_tuple) >= 0 for ver in versions)
+        min_tuple = parse_vs_version(minimum)
+        meets_min = any(compare_versions(parse_vs_version(ver), min_tuple) >= 0 for ver in versions)
         if not meets_min:
             return SectionEvaluation(
                 status=CheckStatus.FAIL,
@@ -537,7 +542,7 @@ def _check_single_tool(ctx: ProbeContext, requirement: ToolRequirement) -> Secti
             version = first[0] if first else sdks[0]
             evidence.append(version)
             if requirement.min_version:
-                if _compare_versions(_parse_version_tuple(version), _parse_version_tuple(requirement.min_version)) < 0:
+                if compare_versions(parse_vs_version(version), parse_vs_version(requirement.min_version)) < 0:
                     status = CheckStatus.FAIL
                     message = f".NET SDK {version} below required {requirement.min_version}."
                     actions = _winget_action()
