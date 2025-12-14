@@ -22,6 +22,8 @@ def test_generate_vsconfig_contains_manifest_components(tmp_path: Path) -> None:
     expected_components = {item for item in manifest.visual_studio.requires_components if ".Workload." not in item}
     assert set(data["workloads"]) == expected_workloads
     assert set(data["components"]) == expected_components
+    assert path.is_absolute()
+    assert path.exists()
 
 
 def test_plan_vs_modify_detects_missing(monkeypatch) -> None:
@@ -135,6 +137,22 @@ def test_modify_vs_install_usage_failure(monkeypatch, tmp_path: Path) -> None:
         install_path=Path("C:/VS"),
         setup_exe=setup_exe,
         vsconfig_path=vsconfig,
+        vs_passive=True,
+        dry_run=False,
+        logger=None,
+    )
+    assert not outcome.success
+    assert outcome.blocked
+
+
+def test_modify_vs_install_missing_config(tmp_path: Path) -> None:
+    setup_exe = tmp_path / "setup.exe"
+    setup_exe.write_text("", encoding="utf-8")
+    missing_cfg = tmp_path / "missing.vsconfig"
+    outcome = visual_studio.modify_vs_install(
+        install_path=Path("C:/VS"),
+        setup_exe=setup_exe,
+        vsconfig_path=missing_cfg,
         vs_passive=True,
         dry_run=False,
         logger=None,

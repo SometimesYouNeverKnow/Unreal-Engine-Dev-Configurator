@@ -131,7 +131,8 @@ def generate_vsconfig(manifest: Manifest) -> Path:
         "workloads": sorted(set(workloads)),
     }
     target.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    return target
+    resolved = target.resolve()
+    return resolved
 
 
 def modify_vs_install(
@@ -143,6 +144,10 @@ def modify_vs_install(
     dry_run: bool,
     logger: Optional[object] = None,
 ) -> VSModifyOutcome:
+    vsconfig_path = vsconfig_path.resolve()
+    if not vsconfig_path.exists():
+        message = f"Visual Studio config file missing: {vsconfig_path}"
+        return VSModifyOutcome(success=False, message=message, logs=[message], blocked=True)
     cmd = _build_installer_command(setup_exe, install_path, vsconfig_path, vs_passive)
     log_lines = [f"[vs-installer] {' '.join(cmd)}"]
     _emit(logger, log_lines[-1])
