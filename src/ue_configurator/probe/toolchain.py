@@ -465,13 +465,16 @@ def _evaluate_windows_sdk(manifest: "Manifest", ctx: ProbeContext) -> SectionEva
             ],
         )
     versions = [version for version, _ in entries]
-    preferred = manifest.windows_sdk.preferred_versions
+    preferred_list = list(manifest.windows_sdk.preferred_versions)
+    preferred_single = manifest.windows_sdk.preferred_version
+    if preferred_single and preferred_single not in preferred_list:
+        preferred_list.append(preferred_single)
     minimum = manifest.windows_sdk.minimum_version
     evidence = [f"{version} @ {path}" for version, path in entries]
-    if preferred and any(version in preferred for version in versions):
+    if preferred_list and any(version in preferred_list for version in versions):
         return SectionEvaluation(
             status=CheckStatus.PASS,
-            message=f"Windows SDK matches preferred versions ({preferred}).",
+            message=f"Windows SDK matches preferred versions ({preferred_list}).",
             evidence=evidence,
             actions=[],
         )

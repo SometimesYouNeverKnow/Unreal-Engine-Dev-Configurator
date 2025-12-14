@@ -43,7 +43,6 @@ def test_manifest_compliance_pass(monkeypatch, tmp_path: Path) -> None:
             packages=[
                 "Microsoft.VisualStudio.Workload.NativeDesktop",
                 "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                "Microsoft.VisualStudio.Component.Windows10SDK.22621",
                 "Microsoft.VisualStudio.Component.VC.CMake.Project",
             ],
         )
@@ -78,7 +77,6 @@ def test_manifest_ue57_contains_expected_vs_components() -> None:
     expected = {
         "Microsoft.VisualStudio.Workload.NativeDesktop",
         "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-        "Microsoft.VisualStudio.Component.Windows10SDK.22621",
         "Microsoft.VisualStudio.Component.VC.CMake.Project",
     }
     assert expected.issubset(components)

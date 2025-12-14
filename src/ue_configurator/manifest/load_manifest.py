@@ -86,8 +86,10 @@ def load_manifest_from_path(path: Path) -> Manifest:
         ),
         windows_sdk=WindowsSDKRequirement(
             preferred_versions=[str(ver) for ver in sdk_payload.get("preferred_versions", [])],
+            preferred_version=_normalize_version(sdk_payload.get("preferred_version")),
             minimum_version=_normalize_version(sdk_payload.get("minimum_version")),
             notes=sdk_payload.get("notes"),
+            source=sdk_payload.get("source"),
         ),
         extras={
             name: ToolRequirement(

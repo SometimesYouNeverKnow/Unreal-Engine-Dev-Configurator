@@ -10,7 +10,6 @@
     "requires_components": [
       "Microsoft.VisualStudio.Workload.NativeDesktop",
       "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-      "Microsoft.VisualStudio.Component.Windows10SDK.22621",
       "Microsoft.VisualStudio.Component.VC.CMake.Project"
     ],
     "notes": "Epic aligns UE 5.7 with Visual Studio 2022; component IDs are from Microsoft's VS Installer CLI."
@@ -20,10 +19,8 @@
     "notes": "Matches Epic's UE 5.7 release notes."
   },
   "windows_sdk": {
-    "preferred_versions": [
-      "10.0.22621.0"
-    ],
-    "minimum_version": "10.0.19041.0",
+    "preferred_version": "10.0.22621.0",
+    "minimum_version": "10.0.22000.0",
     "notes": "UE 5.7 build targets Windows 10/11 SDKs."
   },
   "extras": {

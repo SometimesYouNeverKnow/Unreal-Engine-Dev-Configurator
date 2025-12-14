@@ -10,14 +10,29 @@ import shutil
 import subprocess
 import tempfile
 import time
-from typing import List, Optional
+from typing import List, Optional, Tuple
+
+try:  # pragma: no cover - optional on non-Windows
+    import winreg  # type: ignore
+except ImportError:  # pragma: no cover
+    winreg = None
 
 from ue_configurator.manifest import Manifest
+from ue_configurator.manifest.manifest_types import WindowsSDKRequirement
 from ue_configurator.probe.base import ProbeContext
-from ue_configurator.probe.toolchain import VSInstance, compare_versions, get_vs_instances, parse_vs_version
+from ue_configurator.probe.toolchain import (
+    VSInstance,
+    compare_versions,
+    get_vs_instances,
+    parse_vs_version,
+)
 
-
-VS_INSTALLER_PATH = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "Microsoft Visual Studio" / "Installer" / "setup.exe"
+VS_INSTALLER_PATH = (
+    Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+    / "Microsoft Visual Studio"
+    / "Installer"
+    / "setup.exe"
+)
 GENERATED_DIR = Path("manifests") / "generated"
 
 
@@ -35,6 +50,14 @@ class VSModifyOutcome:
     message: str
     logs: List[str] = field(default_factory=list)
     blocked: bool = False
+
+
+@dataclass
+class SDKResolution:
+    satisfied: bool
+    component_id: Optional[str]
+    message: str
+    candidates: List[str] = field(default_factory=list)
 
 
 def find_vs_installer_setup_exe() -> Optional[Path]:
@@ -94,7 +117,21 @@ def ensure_vs_manifest_components(
     if setup_exe is None:
         message = "Visual Studio Installer (setup.exe) not found under Program Files (x86)."
         return VSModifyOutcome(success=False, blocked=True, message=message, logs=[message])
-    vsconfig_path = generate_vsconfig(manifest)
+    sdk_resolution = resolve_windows_sdk_component(manifest)
+    if logger and sdk_resolution.message:
+        logger.log(f"[setup] Windows SDK: {sdk_resolution.message}")
+        if sdk_resolution.candidates:
+            logger.log(f"[setup] SDK candidates: {', '.join(sdk_resolution.candidates)}")
+    if not sdk_resolution.satisfied and sdk_resolution.component_id is None:
+        message = (
+            "Unable to satisfy Windows SDK requirement. "
+            "Install the required Windows SDK via Visual Studio Installer or the standalone SDK package."
+        )
+        return VSModifyOutcome(success=False, message=message, logs=[message], blocked=True)
+    extra_components: List[str] = []
+    if sdk_resolution.component_id:
+        extra_components.append(sdk_resolution.component_id)
+    vsconfig_path = generate_vsconfig(manifest, extra_components=extra_components)
     install_path = plan.instance.installation_path if plan.instance else None
     if not install_path:
         return VSModifyOutcome(success=False, blocked=True, message="Unable to identify a Visual Studio install path.")
@@ -111,7 +148,7 @@ def ensure_vs_manifest_components(
     return outcome
 
 
-def generate_vsconfig(manifest: Manifest) -> Path:
+def generate_vsconfig(manifest: Manifest, extra_components: Optional[List[str]] = None) -> Path:
     GENERATED_DIR.mkdir(parents=True, exist_ok=True)
     filename = f"{manifest.id}_{manifest.fingerprint}.vsconfig"
     target = GENERATED_DIR / filename
@@ -125,6 +162,8 @@ def generate_vsconfig(manifest: Manifest) -> Path:
             workloads.append(slug)
         else:
             components.append(slug)
+    if extra_components:
+        components.extend(extra_components)
     config = {
         "version": "1.0",
         "components": sorted(set(components)),
@@ -133,6 +172,46 @@ def generate_vsconfig(manifest: Manifest) -> Path:
     target.write_text(json.dumps(config, indent=2), encoding="utf-8")
     resolved = target.resolve()
     return resolved
+
+
+def resolve_windows_sdk_component(
+    manifest: Optional[Manifest], available_components: Optional[List[str]] = None
+) -> SDKResolution:
+    if manifest is None or manifest.windows_sdk is None:
+        return SDKResolution(True, None, "No Windows SDK requirement specified.", [])
+
+    requirement = manifest.windows_sdk
+    min_version = requirement.minimum_version or requirement.preferred_version
+    if not min_version:
+        return SDKResolution(True, None, "Windows SDK minimum version not defined; skipping.", [])
+
+    installed_versions = _list_installed_sdks()
+    for installed in installed_versions:
+        if _compare_sdk_versions(installed, min_version) >= 0:
+            return SDKResolution(
+                True,
+                None,
+                f"Installed Windows SDK {installed} satisfies >= {min_version}.",
+                [],
+            )
+
+    candidates = _candidate_sdk_ids(requirement, min_version)
+    if not candidates:
+        message = (
+            f"Unable to resolve Windows SDK component ID for minimum version {min_version}. "
+            "Install the SDK manually via Visual Studio Individual Components."
+        )
+        return SDKResolution(False, None, message, [])
+    component_id = None
+    if available_components:
+        for candidate in candidates:
+            if candidate in available_components:
+                component_id = candidate
+                break
+    if component_id is None:
+        component_id = candidates[0]
+    message = f"Will install Windows SDK (>= {min_version}) via {component_id}."
+    return SDKResolution(False, component_id, message, candidates)
 
 
 def modify_vs_install(
@@ -149,7 +228,8 @@ def modify_vs_install(
         message = f"Visual Studio config file missing: {vsconfig_path}"
         return VSModifyOutcome(success=False, message=message, logs=[message], blocked=True)
     cmd = _build_installer_command(setup_exe, install_path, vsconfig_path, vs_passive)
-    log_lines = [f"[vs-installer] {' '.join(cmd)}"]
+    log_lines = [f"[vs-installer] Using config file: {vsconfig_path}"]
+    log_lines.append(f"[vs-installer] {' '.join(cmd)}")
     _emit(logger, log_lines[-1])
     if dry_run:
         return VSModifyOutcome(success=True, message="[dry-run] Visual Studio modify skipped.", logs=log_lines)
@@ -292,3 +372,87 @@ def _detect_usage(text: str) -> bool:
         "usage:",
     ]
     return any(token in lower for token in tokens)
+
+
+def _list_installed_sdks() -> List[str]:
+    versions: List[str] = []
+    if winreg is None:
+        return versions
+    views = [0]
+    if hasattr(winreg, "KEY_WOW64_32KEY"):
+        views.append(getattr(winreg, "KEY_WOW64_32KEY"))
+    for view in views:
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"SOFTWARE\Microsoft\Microsoft SDKs\Windows\v10.0",
+                access=winreg.KEY_READ | view,
+            ) as key:
+                product_version, _ = winreg.QueryValueEx(key, "ProductVersion")
+                if product_version:
+                    versions.append(str(product_version))
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+    return versions
+
+
+def _candidate_sdk_ids(requirement: WindowsSDKRequirement, min_version: str) -> List[str]:
+    builds: List[str] = []
+
+    def add_version(text: Optional[str]) -> None:
+        if not text:
+            return
+        build = _extract_sdk_build(text)
+        if build and build not in builds:
+            builds.append(build)
+
+    add_version(requirement.preferred_version)
+    for version in requirement.preferred_versions:
+        add_version(version)
+    add_version(min_version)
+
+    fallback_builds = ["26100", "25398", "22621", "22000", "20348", "19041"]
+    for build in fallback_builds:
+        if build not in builds:
+            builds.append(build)
+
+    candidate_ids: List[str] = []
+    for build in builds:
+        candidate_ids.append(f"Microsoft.VisualStudio.Component.Windows11SDK.{build}")
+        candidate_ids.append(f"Microsoft.VisualStudio.Component.Windows10SDK.{build}")
+    return candidate_ids
+
+
+def _extract_sdk_build(version: str) -> Optional[str]:
+    parts = [part for part in version.split(".") if part]
+    if len(parts) >= 3:
+        return parts[2]
+    if parts:
+        return parts[-1]
+    return None
+
+
+def _parse_sdk_version(version: str) -> Tuple[int, ...]:
+    parts = []
+    for token in version.split("."):
+        if not token:
+            continue
+        try:
+            parts.append(int(token))
+        except ValueError:
+            parts.append(0)
+    while len(parts) < 4:
+        parts.append(0)
+    return tuple(parts)
+
+
+def _compare_sdk_versions(left: str, right: str) -> int:
+    left_tuple = _parse_sdk_version(left)
+    right_tuple = _parse_sdk_version(right)
+    if left_tuple < right_tuple:
+        return -1
+    if left_tuple > right_tuple:
+        return 1
+    return 0

@@ -35,8 +35,10 @@ class MSVCRequirement:
 @dataclass
 class WindowsSDKRequirement:
     preferred_versions: List[str] = field(default_factory=list)
+    preferred_version: Optional[str] = None
     minimum_version: Optional[str] = None
     notes: Optional[str] = None
+    source: Optional[str] = None
 
 
 @dataclass

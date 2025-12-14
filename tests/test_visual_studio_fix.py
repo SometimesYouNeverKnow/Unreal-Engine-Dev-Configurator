@@ -8,8 +8,11 @@ import subprocess
 
 import pytest
 
+from types import SimpleNamespace
+
 from ue_configurator.fix import visual_studio
 from ue_configurator.manifest import MANIFEST_DIR, load_manifest_from_path
+from ue_configurator.manifest.manifest_types import WindowsSDKRequirement
 from ue_configurator.probe.base import ProbeContext
 from ue_configurator.probe.toolchain import VSInstance
 
@@ -24,6 +27,7 @@ def test_generate_vsconfig_contains_manifest_components(tmp_path: Path) -> None:
     assert set(data["components"]) == expected_components
     assert path.is_absolute()
     assert path.exists()
+    assert not any("Windows10SDK.22621" in comp for comp in data["components"])
 
 
 def test_plan_vs_modify_detects_missing(monkeypatch) -> None:
@@ -40,6 +44,56 @@ def test_plan_vs_modify_detects_missing(monkeypatch) -> None:
     plan = visual_studio.plan_vs_modify(ctx, manifest)
     assert plan.required
     assert "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" in plan.missing_components
+
+
+def test_resolve_sdk_satisfied_by_installed(monkeypatch) -> None:
+    requirement = WindowsSDKRequirement(
+        preferred_version="10.0.22621.0",
+        minimum_version="10.0.22621.0",
+    )
+    manifest = SimpleNamespace(windows_sdk=requirement)
+    monkeypatch.setattr(visual_studio, "_list_installed_sdks", lambda: ["10.0.22621.0"])
+    resolution = visual_studio.resolve_windows_sdk_component(manifest)
+    assert resolution.satisfied
+    assert resolution.component_id is None
+
+
+def test_resolve_sdk_prefers_available(monkeypatch) -> None:
+    requirement = WindowsSDKRequirement(
+        preferred_version="10.0.22621.0",
+        minimum_version="10.0.22000.0",
+    )
+    manifest = SimpleNamespace(windows_sdk=requirement)
+    monkeypatch.setattr(visual_studio, "_list_installed_sdks", lambda: [])
+    available = ["Microsoft.VisualStudio.Component.Windows11SDK.22621"]
+    resolution = visual_studio.resolve_windows_sdk_component(manifest, available_components=available)
+    assert not resolution.satisfied
+    assert resolution.component_id == "Microsoft.VisualStudio.Component.Windows11SDK.22621"
+
+
+def test_resolve_sdk_fallback_to_newer(monkeypatch) -> None:
+    requirement = WindowsSDKRequirement(
+        preferred_version="10.0.22621.0",
+        minimum_version="10.0.22621.0",
+    )
+    manifest = SimpleNamespace(windows_sdk=requirement)
+    monkeypatch.setattr(visual_studio, "_list_installed_sdks", lambda: [])
+    available = ["Microsoft.VisualStudio.Component.Windows11SDK.26100"]
+    resolution = visual_studio.resolve_windows_sdk_component(manifest, available_components=available)
+    assert resolution.component_id == "Microsoft.VisualStudio.Component.Windows11SDK.26100"
+
+
+def test_resolve_sdk_failure_when_no_candidates(monkeypatch) -> None:
+    requirement = WindowsSDKRequirement(
+        preferred_version=None,
+        minimum_version="10.0.22621.0",
+    )
+    manifest = SimpleNamespace(windows_sdk=requirement)
+    monkeypatch.setattr(visual_studio, "_list_installed_sdks", lambda: [])
+    monkeypatch.setattr(visual_studio, "_candidate_sdk_ids", lambda req, min_ver: [])
+    resolution = visual_studio.resolve_windows_sdk_component(manifest)
+    assert not resolution.satisfied
+    assert resolution.component_id is None
 
 
 def test_build_installer_command_passive() -> None:
