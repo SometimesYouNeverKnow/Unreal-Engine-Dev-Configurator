@@ -19,6 +19,8 @@ from ue_configurator.setup.pipeline import (
     _needs_admin,
     SetupLogger,
 )
+from ue_configurator.setup.splash import maybe_show_splash
+from types import SimpleNamespace
 
 
 class DummyLogger:
@@ -55,6 +57,27 @@ def _make_runtime(checks: list[CheckResult], phases: list[int] | None = None) ->
         scan=scan,
         state=SetupState(),
     )
+
+
+def _make_options(**overrides) -> SetupOptions:
+    defaults = dict(
+        phases=[0],
+        apply=False,
+        resume=False,
+        plan_only=False,
+        include_horde=False,
+        use_winget=True,
+        ue_root=None,
+        dry_run=False,
+        verbose=False,
+        no_color=True,
+        json_path=None,
+        log_path=Path("logs/test.log"),
+        show_splash=True,
+        no_splash_flag=False,
+    )
+    defaults.update(overrides)
+    return SetupOptions(**defaults)
 
 
 def test_build_steps_includes_git_when_missing() -> None:
@@ -117,3 +140,32 @@ def test_setup_logger_sanitizes_path(tmp_path: Path) -> None:
     quoted = f'"{tmp_path / "logs with space" / "setup.log"}"'
     logger = SetupLogger(Path(quoted))
     assert logger.path.exists()
+
+
+def test_splash_skipped_by_flag(monkeypatch) -> None:
+    opts = _make_options(show_splash=False, no_splash_flag=True)
+    triggered = False
+
+    def fake_play() -> None:
+        nonlocal triggered
+        triggered = True
+
+    monkeypatch.setattr("ue_configurator.setup.splash._play_animation", fake_play)
+    monkeypatch.setattr("ue_configurator.setup.splash.sys.stdin", SimpleNamespace(isatty=lambda: True))
+    maybe_show_splash(opts)
+    assert not triggered
+
+
+def test_splash_skipped_by_env(monkeypatch) -> None:
+    opts = _make_options(show_splash=True)
+    triggered = False
+
+    def fake_play() -> None:
+        nonlocal triggered
+        triggered = True
+
+    monkeypatch.setattr("ue_configurator.setup.splash._play_animation", fake_play)
+    monkeypatch.setattr("ue_configurator.setup.splash.sys.stdin", SimpleNamespace(isatty=lambda: True))
+    monkeypatch.setenv("UECFG_NO_SPLASH", "1")
+    maybe_show_splash(opts)
+    assert not triggered

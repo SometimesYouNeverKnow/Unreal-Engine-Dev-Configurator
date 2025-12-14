@@ -55,6 +55,7 @@ Double-click Setup
   3. Ask for consent, UE root path, and whether to include Horde/UBA checks.
   4. Elevate via UAC if installs are requested.
   5. Execute the plan, stream logs to `logs\uecfg_setup_<timestamp>.log`, resume from `.uecfg_state.json` if rerun, and save a JSON report to `reports\uecfg_report_<timestamp>.json`.
+- Setup greets interactive users with a short tongue-in-cheek ASCII skull splash. Skip it with `uecfg setup --no-splash` (or pass `--no-splash` to `run_setup.bat`) or set `UECFG_NO_SPLASH=1` for scripting environments.
 - From any shell you can run the same workflow with more control:
 
 ```powershell

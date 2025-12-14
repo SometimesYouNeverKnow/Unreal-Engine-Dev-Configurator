@@ -86,6 +86,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--log", help=argparse.SUPPRESS)
     setup_parser.add_argument("--use-winget", dest="use_winget", action="store_true", help=argparse.SUPPRESS)
     setup_parser.add_argument("--no-winget", dest="use_winget", action="store_false", help=argparse.SUPPRESS)
+    setup_parser.add_argument("--no-splash", action="store_true", help="Skip the punk skull splash screen.")
     setup_parser.set_defaults(use_winget=None)
 
     return parser
@@ -226,6 +227,10 @@ def handle_setup(args: argparse.Namespace) -> int:
     if manifest_res.manifest is None and (selected_manifest or selected_ue_version):
         target = selected_manifest or selected_ue_version
         print(f"[manifest] Unable to load manifest '{target}'. Continuing without manifest.")
+    no_splash_flag = bool(getattr(args, "no_splash", False))
+    no_splash_env = os.environ.get("UECFG_NO_SPLASH") == "1"
+    show_splash = bool(interactive and not no_splash_flag and not no_splash_env)
+
     options = SetupOptions(
         phases=phases,
         apply=apply_flag and not args.plan,
@@ -245,6 +250,8 @@ def handle_setup(args: argparse.Namespace) -> int:
         or manifest_res.detected_version
         or (manifest_res.manifest.ue_version if manifest_res.manifest else None),
         manifest_arg=selected_manifest,
+        show_splash=show_splash,
+        no_splash_flag=no_splash_flag,
         profile=profile,
     )
     return run_setup(options)

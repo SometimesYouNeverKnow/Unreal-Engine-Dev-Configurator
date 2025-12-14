@@ -29,6 +29,7 @@ from ue_configurator.probe.runner import ScanData, run_scan
 from ue_configurator.report.console import render_console
 from ue_configurator.report.json_report import write_json
 from ue_configurator.report.common import ConsoleTheme
+from ue_configurator.setup.splash import maybe_show_splash
 
 
 STATE_FILE = Path(".uecfg_state.json")
@@ -97,6 +98,8 @@ class SetupOptions:
     manifest_source: Optional[str] = None
     ue_version: Optional[str] = None
     manifest_arg: Optional[str] = None
+    show_splash: bool = True
+    no_splash_flag: bool = False
 
 
 class SetupLogger:
@@ -395,6 +398,7 @@ def _apply_horde_template(runtime: SetupRuntime) -> StepResult:
 
 
 def run_setup(options: SetupOptions) -> int:
+    maybe_show_splash(options)
     options.log_path = sanitize_path(options.log_path)
     ctx = ProbeContext(
         dry_run=options.dry_run,
@@ -539,6 +543,8 @@ def _reconstruct_cli_args(options: SetupOptions) -> List[str]:
     args.extend(["--log", str(options.log_path)])
     if options.apply:
         args.append("--apply")
+    if options.no_splash_flag:
+        args.append("--no-splash")
     return args
 
 
