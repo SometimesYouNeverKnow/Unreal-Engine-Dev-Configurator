@@ -143,17 +143,7 @@ def modify_vs_install(
     dry_run: bool,
     logger: Optional[object] = None,
 ) -> VSModifyOutcome:
-    cmd = [
-        str(setup_exe),
-        "modify",
-        "--installPath",
-        str(install_path),
-        "--config",
-        str(vsconfig_path),
-        "--norestart",
-    ]
-    if vs_passive:
-        cmd.append("--passive")
+    cmd = _build_installer_command(setup_exe, install_path, vsconfig_path, vs_passive)
     log_lines = [f"[vs-installer] {' '.join(cmd)}"]
     _emit(logger, log_lines[-1])
     if dry_run:
@@ -203,12 +193,20 @@ def modify_vs_install(
             time.sleep(5)
 
         stdout, stderr = process.communicate()
+        usage_detected = False
         if stdout:
-            log_lines.append(stdout.strip())
-            _emit(logger, stdout.strip())
+            stdout = stdout.strip()
+            log_lines.append(stdout)
+            _emit(logger, stdout)
+            usage_detected = usage_detected or _detect_usage(stdout)
         if stderr:
-            log_lines.append(stderr.strip())
-            _emit(logger, stderr.strip())
+            stderr = stderr.strip()
+            log_lines.append(stderr)
+            _emit(logger, stderr)
+            usage_detected = usage_detected or _detect_usage(stderr)
+        if usage_detected:
+            message = "Visual Studio Installer returned usage/help output. Verify arguments or rerun with --vs-interactive."
+            return VSModifyOutcome(success=False, message=message, logs=log_lines, blocked=True)
         if process.returncode != 0:
             message = f"Visual Studio Installer exited with {process.returncode}."
             return VSModifyOutcome(success=False, message=message, logs=log_lines)
@@ -261,3 +259,31 @@ def _discover_vs_log_hint(since_epoch: float) -> Optional[str]:
             latest_mtime = stat.st_mtime
             latest_path = candidate
     return str(latest_path) if latest_path else None
+
+
+def _build_installer_command(
+    setup_exe: Path, install_path: Path, vsconfig_path: Path, vs_passive: bool
+) -> List[str]:
+    cmd = [
+        str(setup_exe),
+        "modify",
+        "--installPath",
+        str(install_path),
+        "--config",
+        str(vsconfig_path),
+    ]
+    if vs_passive:
+        cmd.extend(["--passive", "--norestart"])
+    return cmd
+
+
+def _detect_usage(text: str) -> bool:
+    if not text:
+        return False
+    lower = text.lower()
+    tokens = [
+        "usage: setup.exe",
+        "--norestart requires either --quiet or --passive",
+        "usage:",
+    ]
+    return any(token in lower for token in tokens)

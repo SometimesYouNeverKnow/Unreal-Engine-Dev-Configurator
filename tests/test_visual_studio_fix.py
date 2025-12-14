@@ -40,6 +40,23 @@ def test_plan_vs_modify_detects_missing(monkeypatch) -> None:
     assert "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" in plan.missing_components
 
 
+def test_build_installer_command_passive() -> None:
+    cmd = visual_studio._build_installer_command(
+        Path("setup.exe"), Path("C:/VS"), Path("cfg.vsconfig"), True
+    )
+    assert "--passive" in cmd
+    assert "--norestart" in cmd
+    assert "--wait" not in cmd
+
+
+def test_build_installer_command_interactive() -> None:
+    cmd = visual_studio._build_installer_command(
+        Path("setup.exe"), Path("C:/VS"), Path("cfg.vsconfig"), False
+    )
+    assert "--passive" not in cmd
+    assert "--norestart" not in cmd
+
+
 def test_modify_vs_install_runs_setup(monkeypatch, tmp_path: Path) -> None:
     setup_exe = tmp_path / "setup.exe"
     setup_exe.write_text("", encoding="utf-8")
@@ -84,6 +101,46 @@ def test_modify_vs_install_runs_setup(monkeypatch, tmp_path: Path) -> None:
     )
     assert outcome.success
     assert "--wait" not in captured["cmd"]
+    assert "--passive" in captured["cmd"]
+    assert "--norestart" in captured["cmd"]
+
+
+def test_modify_vs_install_usage_failure(monkeypatch, tmp_path: Path) -> None:
+    setup_exe = tmp_path / "setup.exe"
+    setup_exe.write_text("", encoding="utf-8")
+    vsconfig = tmp_path / "cfg.vsconfig"
+    vsconfig.write_text("{}", encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    monkeypatch.setattr(visual_studio.tempfile, "mkdtemp", lambda prefix: str(run_dir))
+    monkeypatch.setattr("ue_configurator.fix.visual_studio._discover_vs_log_hint", lambda since: None)
+
+    class DummyProc:
+        pid = 4321
+        returncode = 0
+
+        def poll(self):
+            return 0
+
+        def communicate(self):
+            return ("Usage: setup.exe modify [options]", "")
+
+    monkeypatch.setattr(
+        visual_studio.subprocess,
+        "Popen",
+        lambda *args, **kwargs: DummyProc(),
+    )
+
+    outcome = visual_studio.modify_vs_install(
+        install_path=Path("C:/VS"),
+        setup_exe=setup_exe,
+        vsconfig_path=vsconfig,
+        vs_passive=True,
+        dry_run=False,
+        logger=None,
+    )
+    assert not outcome.success
+    assert outcome.blocked
 
 
 def test_ensure_vs_manifest_components_blocked_without_setup(monkeypatch) -> None:
