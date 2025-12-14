@@ -115,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Force the Visual Studio Installer UI during VS component installs.",
     )
+    setup_parser.add_argument("--_elevated", action="store_true", help=argparse.SUPPRESS)
     setup_parser.set_defaults(use_winget=None)
 
     return parser
@@ -258,7 +259,7 @@ def handle_setup(args: argparse.Namespace) -> int:
     no_splash_flag = bool(getattr(args, "no_splash", False))
     no_splash_env = os.environ.get("UECFG_NO_SPLASH") == "1"
     show_splash = bool(interactive and not no_splash_flag and not no_splash_env)
-
+    elevated_flag = bool(getattr(args, "_elevated", False))
     vs_passive = getattr(args, "vs_passive", True)
 
     options = SetupOptions(
@@ -282,8 +283,9 @@ def handle_setup(args: argparse.Namespace) -> int:
         manifest_arg=selected_manifest,
         vs_passive=vs_passive,
         show_splash=show_splash,
-        no_splash_flag=no_splash_flag,
+        no_splash_flag=no_splash_flag or no_splash_env,
         profile=profile,
+        elevated=elevated_flag,
     )
     return run_setup(options)
 

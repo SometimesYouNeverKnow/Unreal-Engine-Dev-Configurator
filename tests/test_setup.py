@@ -75,6 +75,8 @@ def _make_options(**overrides) -> SetupOptions:
         log_path=Path("logs/test.log"),
         show_splash=True,
         no_splash_flag=False,
+        vs_passive=True,
+        elevated=False,
     )
     defaults.update(overrides)
     return SetupOptions(**defaults)

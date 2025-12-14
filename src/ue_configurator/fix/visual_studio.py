@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import List, Optional
 
 from ue_configurator.manifest import Manifest
@@ -150,7 +151,6 @@ def modify_vs_install(
         "--config",
         str(vsconfig_path),
         "--norestart",
-        "--wait",
     ]
     if vs_passive:
         cmd.append("--passive")
@@ -160,21 +160,57 @@ def modify_vs_install(
         return VSModifyOutcome(success=True, message="[dry-run] Visual Studio modify skipped.", logs=log_lines)
     workdir = Path(tempfile.mkdtemp(prefix="uecfg_vs_installer_"))
     try:
-        result = subprocess.run(
-            cmd,
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.stdout:
-            log_lines.append(result.stdout.strip())
-            _emit(logger, result.stdout.strip())
-        if result.stderr:
-            log_lines.append(result.stderr.strip())
-            _emit(logger, result.stderr.strip())
-        if result.returncode != 0:
-            message = f"Visual Studio Installer exited with {result.returncode}."
+        try:
+            process = subprocess.Popen(
+                cmd,
+                cwd=str(workdir),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except OSError as exc:
+            message = f"Failed to launch Visual Studio Installer: {exc}"
+            log_lines.append(message)
+            _emit(logger, message)
+            return VSModifyOutcome(success=False, message=message, logs=log_lines)
+
+        log_lines.append(f"[vs-installer] PID {process.pid} started.")
+        _emit(logger, log_lines[-1])
+        start_monotonic = time.monotonic()
+        start_wall = time.time()
+        heartbeat_interval = 15.0
+        next_heartbeat = start_monotonic + heartbeat_interval
+        log_hint_reported = False
+
+        while True:
+            ret = process.poll()
+            if ret is not None:
+                break
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                elapsed = _format_duration(now - start_monotonic)
+                msg = f"[vs-installer] running... elapsed {elapsed}"
+                log_lines.append(msg)
+                _emit(logger, msg)
+                if not log_hint_reported:
+                    hint = _discover_vs_log_hint(start_wall)
+                    if hint:
+                        hint_msg = f"[vs-installer] Installer logs: {hint}"
+                        log_lines.append(hint_msg)
+                        _emit(logger, hint_msg)
+                        log_hint_reported = True
+                next_heartbeat = now + heartbeat_interval
+            time.sleep(5)
+
+        stdout, stderr = process.communicate()
+        if stdout:
+            log_lines.append(stdout.strip())
+            _emit(logger, stdout.strip())
+        if stderr:
+            log_lines.append(stderr.strip())
+            _emit(logger, stderr.strip())
+        if process.returncode != 0:
+            message = f"Visual Studio Installer exited with {process.returncode}."
             return VSModifyOutcome(success=False, message=message, logs=log_lines)
         return VSModifyOutcome(success=True, message="Visual Studio Installer completed.", logs=log_lines)
     finally:
@@ -198,3 +234,30 @@ def _emit(logger: Optional[object], message: str) -> None:
         return
     if logger and hasattr(logger, "log"):
         logger.log(message)
+
+
+def _format_duration(seconds: float) -> str:
+    seconds = max(0, int(seconds))
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _discover_vs_log_hint(since_epoch: float) -> Optional[str]:
+    temp_dir = Path(tempfile.gettempdir())
+    candidates = []
+    for pattern in ("dd_setup_*.log", "dd_setup_*.log*"):
+        candidates.extend(temp_dir.glob(pattern))
+    latest_path: Optional[Path] = None
+    latest_mtime = since_epoch
+    for candidate in candidates:
+        try:
+            stat = candidate.stat()
+        except OSError:
+            continue
+        if stat.st_mtime >= latest_mtime:
+            latest_mtime = stat.st_mtime
+            latest_path = candidate
+    return str(latest_path) if latest_path else None

@@ -48,13 +48,32 @@ def test_modify_vs_install_runs_setup(monkeypatch, tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     monkeypatch.setattr(visual_studio.tempfile, "mkdtemp", lambda prefix: str(run_dir))
+    monkeypatch.setattr(visual_studio.time, "sleep", lambda *_: None)
+    monkeypatch.setattr("ue_configurator.fix.visual_studio._discover_vs_log_hint", lambda since: None)
 
-    def fake_run(cmd, cwd, capture_output, text, check):
-        assert cmd[0] == str(setup_exe)
+    captured = {}
+
+    class DummyProc:
+        def __init__(self):
+            self.pid = 1234
+            self.returncode = 0
+            self._polls = 0
+
+        def poll(self):
+            if self._polls == 0:
+                self._polls += 1
+                return None
+            return 0
+
+        def communicate(self):
+            return ("ok", "")
+
+    def fake_popen(cmd, cwd, stdout, stderr, text):
+        captured["cmd"] = cmd
         assert Path(cwd) == run_dir
-        return subprocess.CompletedProcess(cmd, 0, stdout="ok", stderr="")
+        return DummyProc()
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(visual_studio.subprocess, "Popen", fake_popen)
     outcome = visual_studio.modify_vs_install(
         install_path=Path("C:/VS"),
         setup_exe=setup_exe,
@@ -64,6 +83,7 @@ def test_modify_vs_install_runs_setup(monkeypatch, tmp_path: Path) -> None:
         logger=None,
     )
     assert outcome.success
+    assert "--wait" not in captured["cmd"]
 
 
 def test_ensure_vs_manifest_components_blocked_without_setup(monkeypatch) -> None:

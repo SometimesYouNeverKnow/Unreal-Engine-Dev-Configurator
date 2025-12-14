@@ -102,6 +102,7 @@ class SetupOptions:
     show_splash: bool = True
     no_splash_flag: bool = False
     vs_passive: bool = True
+    elevated: bool = False
 
 
 class SetupLogger:
@@ -442,6 +443,8 @@ def run_setup(options: SetupOptions) -> int:
     )
     logger = SetupLogger(options.log_path)
     logger.log(f"[setup] Log file: {options.log_path}")
+    if options.elevated:
+        logger.log(f"[setup] Elevated session confirmed (is_admin={_is_admin()}). Continuing setup...")
     if options.manifest:
         source = options.manifest_source or "default"
         logger.log(
@@ -471,9 +474,8 @@ def run_setup(options: SetupOptions) -> int:
             return 1
         options.apply = True
 
-    if _needs_admin(steps, runtime) and not _is_admin() and not options.dry_run:
-        logger.log("[setup] Administrative rights are required. Requesting elevation...")
-        return _relaunch_elevated(options)
+    if _needs_admin(steps, runtime) and not _is_admin() and not options.dry_run and not options.elevated:
+        return _relaunch_elevated(options, logger)
 
     statuses: Dict[str, StepStatus] = {}
     for step in steps:
@@ -529,22 +531,26 @@ def _needs_admin(steps: Iterable[SetupStep], runtime: SetupRuntime) -> bool:
     return False
 
 
-def _relaunch_elevated(options: SetupOptions) -> int:
+def _relaunch_elevated(options: SetupOptions, logger: SetupLogger) -> int:
     args = ["-m", "ue_configurator.cli", "setup"]
-    args.extend(_reconstruct_cli_args(options))
+    args.extend(_reconstruct_cli_args(options, include_elevation_flag=True))
+    printable = " ".join(shlex.quote(part) for part in ([sys.executable] + args))
+    logger.log("[setup] Administrative rights are required. Launching elevated command:")
+    logger.log(f"  {printable}")
+    logger.log("[setup] A new elevated window will continue the setup. You can close this window.")
     params = " ".join(shlex.quote(part) for part in args)
     try:
         ret = ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
     except Exception as exc:  # pragma: no cover
-        print(f"[setup] Unable to relaunch with elevation: {exc}")
+        logger.log(f"[setup] Unable to relaunch with elevation: {exc}")
         return 1
     if ret <= 32:
-        print("[setup] Elevation cancelled or failed.")
+        logger.log("[setup] Elevation cancelled or failed.")
         return 1
     return 0
 
 
-def _reconstruct_cli_args(options: SetupOptions) -> List[str]:
+def _reconstruct_cli_args(options: SetupOptions, *, include_elevation_flag: bool = False) -> List[str]:
     args: List[str] = []
     for phase in options.phases:
         args.extend(["--phase", str(phase)])
@@ -580,6 +586,8 @@ def _reconstruct_cli_args(options: SetupOptions) -> List[str]:
         args.append("--no-splash")
     if not options.vs_passive:
         args.append("--vs-interactive")
+    if include_elevation_flag or options.elevated:
+        args.append("--_elevated")
     return args
 
 
