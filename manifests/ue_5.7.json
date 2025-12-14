@@ -2,26 +2,26 @@
   "$schema": "./schema.json",
   "id": "ue_5.7",
   "ue_version": "5.7",
-  "notes": "UE 5.7 switches the default MSVC toolchain to 14.44 (VS 2022 17.8+).",
+  "notes": "UE 5.7 requires Visual Studio 2022 (17.8+) with MSVC 14.44 and Windows SDK 10.0.22621.0. Component IDs below are Microsoft Visual Studio Installer IDs mapped to Epic's public guidance.",
   "visual_studio": {
     "required_major": 17,
-    "min_build": "17.8.0",
+    "min_version": "17.8",
+    "recommended_version": "17.14",
     "requires_components": [
       "Microsoft.VisualStudio.Workload.NativeDesktop",
       "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
       "Microsoft.VisualStudio.Component.Windows10SDK.22621",
       "Microsoft.VisualStudio.Component.VC.CMake.Project"
     ],
-    "notes": "Install via VS Installer with Desktop development with C++ workload."
+    "notes": "Epic aligns UE 5.7 with Visual Studio 2022; component IDs are from Microsoft's VS Installer CLI."
   },
   "msvc": {
-    "toolset_family": "14.44",
+    "preferred_toolset_family": "14.44",
     "notes": "Matches Epic's UE 5.7 release notes."
   },
   "windows_sdk": {
     "preferred_versions": [
-      "10.0.22621.0",
-      "10.0.22000.0"
+      "10.0.22621.0"
     ],
     "minimum_version": "10.0.19041.0",
     "notes": "UE 5.7 build targets Windows 10/11 SDKs."

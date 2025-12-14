@@ -62,25 +62,32 @@ def load_manifest_from_path(path: Path) -> Manifest:
     vs_payload = payload.get("visual_studio") or {}
     extras_payload = payload.get("extras") or {}
 
+    min_version = _normalize_version(vs_payload.get("min_version") or vs_payload.get("min_build"))
+    recommended_version = _normalize_version(vs_payload.get("recommended_version") or vs_payload.get("max_build"))
+    msvc_payload = payload.get("msvc", {})
+    sdk_payload = payload.get("windows_sdk", {})
     manifest = Manifest(
         id=str(manifest_id),
         ue_version=str(payload.get("ue_version", "")),
         path=path,
         visual_studio=VisualStudioRequirement(
             required_major=int(vs_payload.get("required_major", 0)),
-            min_build=_normalize_version(vs_payload.get("min_build")),
-            max_build=_normalize_version(vs_payload.get("max_build")),
+            min_version=min_version,
+            recommended_version=recommended_version,
             requires_components=[str(comp) for comp in vs_payload.get("requires_components", [])],
             notes=vs_payload.get("notes"),
+            source=vs_payload.get("source"),
         ),
         msvc=MSVCRequirement(
-            toolset_family=str(payload.get("msvc", {}).get("toolset_family", "")),
-            notes=payload.get("msvc", {}).get("notes"),
+            preferred_toolset_family=str(
+                msvc_payload.get("preferred_toolset_family") or msvc_payload.get("toolset_family", "")
+            ),
+            notes=msvc_payload.get("notes"),
         ),
         windows_sdk=WindowsSDKRequirement(
-            preferred_versions=[str(ver) for ver in payload.get("windows_sdk", {}).get("preferred_versions", [])],
-            minimum_version=_normalize_version(payload.get("windows_sdk", {}).get("minimum_version")),
-            notes=payload.get("windows_sdk", {}).get("notes"),
+            preferred_versions=[str(ver) for ver in sdk_payload.get("preferred_versions", [])],
+            minimum_version=_normalize_version(sdk_payload.get("minimum_version")),
+            notes=sdk_payload.get("notes"),
         ),
         extras={
             name: ToolRequirement(

@@ -32,10 +32,10 @@
           "type": "integer",
           "minimum": 15
         },
-        "min_build": {
+        "min_version": {
           "type": "string"
         },
-        "max_build": {
+        "recommended_version": {
           "type": "string"
         },
         "requires_components": {
@@ -46,14 +46,17 @@
         },
         "notes": {
           "type": "string"
+        },
+        "source": {
+          "type": "string"
         }
       }
     },
     "msvc": {
       "type": "object",
-      "required": ["toolset_family"],
+      "required": ["preferred_toolset_family"],
       "properties": {
-        "toolset_family": {
+        "preferred_toolset_family": {
           "type": "string"
         },
         "notes": {
@@ -71,6 +74,9 @@
           }
         },
         "minimum_version": {
+          "type": "string"
+        },
+        "source": {
           "type": "string"
         },
         "notes": {

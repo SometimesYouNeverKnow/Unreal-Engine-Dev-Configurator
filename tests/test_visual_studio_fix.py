@@ -18,8 +18,10 @@ def test_generate_vsconfig_contains_manifest_components(tmp_path: Path) -> None:
     manifest = load_manifest_from_path(MANIFEST_DIR / "ue_5.7.json")
     path = visual_studio.generate_vsconfig(manifest)
     data = json.loads(path.read_text(encoding="utf-8"))
-    assert "Microsoft.VisualStudio.Workload.NativeDesktop" in data["workloads"]
-    assert "Microsoft.VisualStudio.Component.VC.Tools.x86.x64" in data["components"]
+    expected_workloads = {item for item in manifest.visual_studio.requires_components if ".Workload." in item}
+    expected_components = {item for item in manifest.visual_studio.requires_components if ".Workload." not in item}
+    assert set(data["workloads"]) == expected_workloads
+    assert set(data["components"]) == expected_components
 
 
 def test_plan_vs_modify_detects_missing(monkeypatch) -> None:

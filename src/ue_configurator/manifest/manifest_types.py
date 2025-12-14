@@ -19,15 +19,16 @@ class ToolRequirement:
 @dataclass
 class VisualStudioRequirement:
     required_major: int
-    min_build: Optional[str] = None
-    max_build: Optional[str] = None
+    min_version: Optional[str] = None
+    recommended_version: Optional[str] = None
     requires_components: List[str] = field(default_factory=list)
     notes: Optional[str] = None
+    source: Optional[str] = None
 
 
 @dataclass
 class MSVCRequirement:
-    toolset_family: str
+    preferred_toolset_family: str
     notes: Optional[str] = None
 
 

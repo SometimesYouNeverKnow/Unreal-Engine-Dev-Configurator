@@ -72,6 +72,20 @@ def test_manifest_compliance_fail_without_vs(monkeypatch) -> None:
     assert result.status == CheckStatus.FAIL
 
 
+def test_manifest_ue57_contains_expected_vs_components() -> None:
+    manifest = load_manifest_from_path(MANIFEST_DIR / "ue_5.7.json")
+    components = set(manifest.visual_studio.requires_components)
+    expected = {
+        "Microsoft.VisualStudio.Workload.NativeDesktop",
+        "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+        "Microsoft.VisualStudio.Component.Windows10SDK.22621",
+        "Microsoft.VisualStudio.Component.VC.CMake.Project",
+    }
+    assert expected.issubset(components)
+    assert manifest.visual_studio.min_version == "17.8"
+    assert manifest.visual_studio.recommended_version == "17.14"
+
+
 def test_scan_metadata_includes_manifest() -> None:
     manifest = load_manifest_from_path(MANIFEST_DIR / "ue_5.7.json")
     ctx = ProbeContext(manifest=manifest, dry_run=True)

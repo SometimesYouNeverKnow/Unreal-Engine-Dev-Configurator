@@ -364,27 +364,32 @@ def _evaluate_visual_studio(manifest: "Manifest", ctx: ProbeContext) -> SectionE
             evidence=["vswhere returned zero instances"],
             actions=[_vs_component_action(vs_req.requires_components)] if vs_req.requires_components else [],
         )
-    min_tuple = parse_vs_version(vs_req.min_build or "0")
-    max_tuple = parse_vs_version(vs_req.max_build or "999.0.0.0") if vs_req.max_build else None
+    min_tuple = parse_vs_version(vs_req.min_version or "0")
     candidates: List[Tuple[VSInstance, Tuple[int, ...], List[str]]] = []
     for inst in instances:
         version_tuple = parse_vs_version(inst.version)
         if not version_tuple or version_tuple[0] != vs_req.required_major:
             continue
-        if vs_req.min_build and compare_versions(version_tuple, min_tuple) < 0:
-            continue
-        if max_tuple and compare_versions(version_tuple, max_tuple) > 0:
+        if vs_req.min_version and compare_versions(version_tuple, min_tuple) < 0:
             continue
         missing = [comp for comp in vs_req.requires_components if comp and comp not in inst.packages]
         candidates.append((inst, version_tuple, missing))
     if not candidates:
+        min_label = vs_req.min_version or "n/a"
         return SectionEvaluation(
             status=CheckStatus.FAIL,
             message=f"No Visual Studio {vs_req.required_major}.x instance meets the manifest build requirements.",
-            evidence=[f"found={len(instances)}; min_build={vs_req.min_build or 'n/a'}"],
+            evidence=[f"found={len(instances)}; min_version={min_label}"],
             actions=[_vs_component_action(vs_req.requires_components)] if vs_req.requires_components else [],
         )
     best_inst, best_version, missing = candidates[0]
+    if not best_inst.packages:
+        return SectionEvaluation(
+            status=CheckStatus.WARN,
+            message="Unable to verify Visual Studio components (vswhere returned no package list).",
+            evidence=[f"{best_inst.display_name} {best_inst.version}"],
+            actions=[_vs_component_action(vs_req.requires_components)],
+        )
     for inst, version, missing_components in candidates[1:]:
         if len(missing_components) < len(missing):
             best_inst, best_version, missing = inst, version, missing_components
@@ -402,7 +407,7 @@ def _evaluate_visual_studio(manifest: "Manifest", ctx: ProbeContext) -> SectionE
     action = _vs_component_action(missing)
     return SectionEvaluation(
         status=CheckStatus.WARN,
-        message=f"Visual Studio installed but missing components: {', '.join(missing)}",
+        message=f"Missing manifest components: {', '.join(missing)}",
         evidence=evidence,
         actions=[action],
     )
@@ -418,7 +423,7 @@ def _evaluate_msvc(manifest: "Manifest", ctx: ProbeContext) -> SectionEvaluation
         for child in msvc_root.iterdir():
             if child.is_dir():
                 toolsets.append((inst.display_name, child.name))
-    required_family = manifest.msvc.toolset_family
+    required_family = manifest.msvc.preferred_toolset_family
     match = next((entry for entry in toolsets if entry[1].startswith(required_family)), None)
     if match:
         return SectionEvaluation(

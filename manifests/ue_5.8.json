@@ -5,7 +5,8 @@
   "notes": "Placeholder manifest for upcoming UE 5.8 releases. Values will be tightened once Epic publishes final guidance.",
   "visual_studio": {
     "required_major": 17,
-    "min_build": "17.10.0",
+    "min_version": "17.10.0",
+    "recommended_version": "17.15.0",
     "requires_components": [
       "Microsoft.VisualStudio.Workload.NativeDesktop",
       "Microsoft.VisualStudio.Component.VC.Tools.x86.x64"
@@ -13,7 +14,7 @@
     "notes": "Treat these as minimums until Epic confirms VS 2026 tooling."
   },
   "msvc": {
-    "toolset_family": "14.45",
+    "preferred_toolset_family": "14.45",
     "notes": "Subject to change when UE 5.8 stabilizes."
   },
   "windows_sdk": {

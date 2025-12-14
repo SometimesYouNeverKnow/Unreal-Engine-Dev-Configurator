@@ -97,6 +97,7 @@ Toolchain manifests
   ```
 - When `--ue-root` is provided, `uecfg` auto-detects the UE version from `Engine/Build/Build.version`. Otherwise the setup wizard prompts for the version (defaulting to the latest manifest) so double-clicking `run_setup.bat` still produces a strict plan.
 - Manifest metadata (ID, UE version, fingerprint) is included in console and JSON output. A compliance check runs in Phase 1 and produces PASS/WARN/FAIL verdicts plus actionable instructions (e.g., Visual Studio components to add). Non-applicable phases are marked `N/A` so profiles such as `agent` are not penalized for missing UE source trees.
+- **UE 5.7 baseline:** Visual Studio 2022 (major 17, >=17.8 with 17.14 recommended), MSVC 14.44 toolset, and Windows SDK 10.0.22621.0. Required VS Installer IDs are encoded directly in `manifests/ue_5.7.json`.
 
 CLI overview
 ------------

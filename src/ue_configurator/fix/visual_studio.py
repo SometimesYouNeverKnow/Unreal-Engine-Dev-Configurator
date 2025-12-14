@@ -50,17 +50,14 @@ def plan_vs_modify(ctx: ProbeContext, manifest: Optional[Manifest]) -> VSModifyP
         return VSModifyPlan(required=False, reason="Visual Studio not installed.")
     vs_req = manifest.visual_studio
     candidates: List[tuple[VSInstance, tuple[int, ...], List[str]]] = []
-    min_version = parse_vs_version(vs_req.min_build or "0")
-    max_version = parse_vs_version(vs_req.max_build or "999.0.0.0") if vs_req.max_build else None
+    min_version = parse_vs_version(vs_req.min_version or "0")
     for inst in instances:
         version_tuple = parse_vs_version(inst.version)
         if not version_tuple:
             continue
         if version_tuple[0] != vs_req.required_major:
             continue
-        if vs_req.min_build and compare_versions(version_tuple, min_version) < 0:
-            continue
-        if max_version and compare_versions(version_tuple, max_version) > 0:
+        if vs_req.min_version and compare_versions(version_tuple, min_version) < 0:
             continue
         missing = _missing_components(vs_req.requires_components, inst.packages)
         candidates.append((inst, version_tuple, missing))
