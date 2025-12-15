@@ -232,12 +232,64 @@ def _prompt_profile_choice(current: Profile) -> Profile:
                 return profile
 
 
+def _prompt_intent() -> str:
+    print("What do you want to do?")
+    print("  1) Configure dev environment (safe / recommended)")
+    print("  2) Build engine/tools (slow; runs Build.bat; opt-in)")
+    print("  3) Configure + build (configure first, then build)")
+    while True:
+        choice = input("Select an option [1]: ").strip()
+        if not choice or choice == "1":
+            return "configure"
+        if choice == "2":
+            return "build"
+        if choice == "3":
+            return "both"
+        print("Please enter 1, 2, or 3.")
+
+
+def _prompt_admin_fallback() -> str:
+    print("[setup] Apply/build requested but this session is not elevated.")
+    print("        a) Continue in check/plan-only mode (no installs/builds)")
+    print("        b) Exit and re-run as admin")
+    while True:
+        resp = input("Choose [a]: ").strip().lower()
+        if not resp or resp == "a":
+            return "plan-only"
+        if resp == "b":
+            return "exit"
+        print("Please choose a or b.")
+
+
 def handle_setup(args: argparse.Namespace) -> int:
-    profile = resolve_profile(args.profile)
     interactive = sys.stdin.isatty()
-    if args.profile is None and interactive and "UECFG_PROFILE" not in os.environ:
+    intent = "configure"
+    build_after_config = False
+    build_only = False
+    build_engine_flag = bool(args.build_engine)
+    interactive_prompt_needed = (
+        interactive
+        and not args.plan
+        and not args.apply
+        and args.profile is None
+        and not args.build_engine
+        and not args.build_targets
+    )
+    if interactive_prompt_needed:
+        intent = _prompt_intent()
+        if intent == "build":
+            build_engine_flag = True
+            build_only = True
+        elif intent == "both":
+            build_after_config = True
+
+    profile = resolve_profile(args.profile)
+    skip_profile_prompt = build_only
+    if args.profile is None and interactive and not skip_profile_prompt and "UECFG_PROFILE" not in os.environ:
         profile = _prompt_profile_choice(profile)
     phases = _resolve_phases(args.phase, profile)
+    if build_only and not args.phase:
+        phases = [2]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     pre_log = getattr(args, "_pre_log_path", None)
     log_path = pre_log if pre_log is not None else (Path(args.log) if args.log else Path("logs") / f"uecfg_setup_{timestamp}.log")
@@ -246,7 +298,7 @@ def handle_setup(args: argparse.Namespace) -> int:
     ctx_preview = ProbeContext(dry_run=True, verbose=args.verbose, ue_root=args.ue_root)
     winget_available = toolchain_fix.winget_available(ctx_preview)
     use_winget = winget_available if args.use_winget is None else args.use_winget
-    include_horde = args.include_horde
+    include_horde = False if build_only else args.include_horde
     ue_root = args.ue_root
     selected_manifest = args.manifest
     selected_ue_version = args.ue_version
@@ -258,9 +310,21 @@ def handle_setup(args: argparse.Namespace) -> int:
             normalized_targets.extend(parts)
         build_targets = normalized_targets or None
 
-    apply_flag = args.apply
+    apply_flag = args.apply or build_only
+    plan_only_flag = args.plan
 
-    if not args.apply and interactive and not args.plan:
+    if build_only and ue_root is None and interactive:
+        response = input("Enter UE root path (required for build): ").strip().strip('"')
+        if not response:
+            print("[setup] UE root is required for build. Exiting.")
+            return 1
+        root_path = Path(response)
+        if not root_path.exists():
+            print(f"[setup] UE root {root_path} does not exist. Exiting.")
+            return 1
+        ue_root = response
+
+    if not args.apply and interactive and not args.plan and not build_only:
         if winget_available and args.use_winget is None:
             use_winget = _prompt_bool_cli("winget detected. Use it for installs?", True)
         elif not winget_available:
@@ -293,10 +357,20 @@ def handle_setup(args: argparse.Namespace) -> int:
             apply_flag = True
         else:
             apply_flag = False
-    elif not args.apply and not interactive and not args.plan:
+    elif not args.apply and not interactive and not args.plan and not build_only:
         if not args.plan:
             print("[setup] Non-interactive session detected. Re-run with --apply to execute steps.")
         apply_flag = False
+
+    if interactive and (apply_flag or build_engine_flag) and not getattr(args, "_elevated", False) and not _is_admin():
+        choice = _prompt_admin_fallback()
+        if choice == "exit":
+            print("[setup] Exiting so you can rerun as admin.")
+            return 1
+        apply_flag = False
+        build_engine_flag = False
+        build_after_config = False
+        plan_only_flag = True
 
     manifest_res = resolve_manifest(manifest=selected_manifest, ue_version=selected_ue_version, ue_root=ue_root)
     if manifest_res.manifest is None and (selected_manifest or selected_ue_version):
@@ -308,11 +382,14 @@ def handle_setup(args: argparse.Namespace) -> int:
     elevated_flag = bool(getattr(args, "_elevated", False))
     vs_passive = getattr(args, "vs_passive", True)
 
+    if interactive and build_after_config:
+        build_engine_flag = _prompt_bool_cli("Build missing engine/tools now?", True)
+
     options = SetupOptions(
         phases=phases,
-        apply=apply_flag and not args.plan,
+        apply=apply_flag and not plan_only_flag,
         resume=args.resume,
-        plan_only=args.plan,
+        plan_only=plan_only_flag,
         include_horde=include_horde,
         use_winget=use_winget,
         ue_root=ue_root,
@@ -333,7 +410,7 @@ def handle_setup(args: argparse.Namespace) -> int:
         profile=profile,
         elevated=elevated_flag,
         run_prereqs=getattr(args, "run_prereqs", False),
-        build_engine=getattr(args, "build_engine", False),
+        build_engine=build_engine_flag,
         build_targets=build_targets,
     )
     return run_setup(options)

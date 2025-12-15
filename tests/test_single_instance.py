@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+import tempfile
 
 BASE_ENV = os.environ.copy()
 BASE_ENV["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent / "src")
@@ -21,6 +22,10 @@ def _run(code: str, env=None) -> subprocess.CompletedProcess:
 
 
 def test_single_instance_blocks_second_process(tmp_path):
+    # Clean up any stale lock from prior runs.
+    lock_file = Path(tempfile.gettempdir()) / "uecfg-test.lock"
+    if lock_file.exists():
+        lock_file.unlink()
     # Use a test-specific lock name to avoid interfering with real runs.
     holder_code = """
 import time

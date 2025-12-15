@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import nullcontext
 
 from ue_configurator.profile import Profile
 from ue_configurator.probe.base import ActionRecommendation, CheckResult, CheckStatus, CommandResult, ProbeContext
@@ -300,6 +301,7 @@ def test_banner_before_profile_prompt(monkeypatch, capsys) -> None:
 
     monkeypatch.setattr("builtins.input", fake_input)
     monkeypatch.setattr("ue_configurator.cli._prompt_bool_cli", lambda *args, **kwargs: False)
+    monkeypatch.setattr("ue_configurator.cli.acquire_single_instance_lock", lambda *args, **kwargs: nullcontext())
     monkeypatch.setattr("ue_configurator.cli.run_setup", lambda opts: 0)
 
     cli.main(["setup", "--plan", "--include-horde"])
