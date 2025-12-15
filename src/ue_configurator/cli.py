@@ -137,6 +137,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="build_targets",
         help="Override the default engine targets to build (repeatable).",
     )
+    setup_parser.add_argument(
+        "--register-engine",
+        action="store_true",
+        help="Register the source-built engine via Register.bat (Windows).",
+    )
     setup_parser.add_argument("--_elevated", action="store_true", help=argparse.SUPPRESS)
     setup_parser.set_defaults(use_winget=None)
 
@@ -153,9 +158,12 @@ def handle_scan(args: argparse.Namespace) -> int:
     profile = resolve_profile(args.profile)
     phases = _resolve_phases(args.phase, profile)
     manifest_res = resolve_manifest(manifest=args.manifest, ue_version=args.ue_version, ue_root=args.ue_root)
+    if manifest_res.note:
+        print(f"[manifest] {manifest_res.note}")
     if manifest_res.manifest is None and (args.manifest or args.ue_version):
         target = args.manifest or args.ue_version
-        print(f"[manifest] Unable to load manifest '{target}'. Continuing without manifest.")
+        message = manifest_res.failure_reason or f"Unable to load manifest '{target}'. Continuing without manifest."
+        print(f"[manifest] {message}")
     ctx = ProbeContext(
         dry_run=True,
         verbose=args.verbose,
@@ -163,6 +171,7 @@ def handle_scan(args: argparse.Namespace) -> int:
         profile=profile.value,
         manifest=manifest_res.manifest,
     )
+    ctx.manifest_note = manifest_res.note
     banner = format_startup_banner(
         ctx,
         command="scan",
@@ -172,6 +181,7 @@ def handle_scan(args: argparse.Namespace) -> int:
         log_path=None,
         manifest=manifest_res.manifest,
         manifest_source=manifest_res.source,
+        manifest_note=manifest_res.note,
         ue_root=args.ue_root,
         profile=profile,
     )
@@ -190,9 +200,12 @@ def handle_scan(args: argparse.Namespace) -> int:
 def handle_verify(args: argparse.Namespace) -> int:
     profile = resolve_profile(args.profile)
     manifest_res = resolve_manifest(manifest=args.manifest, ue_version=args.ue_version, ue_root=args.ue_root)
+    if manifest_res.note:
+        print(f"[manifest] {manifest_res.note}")
     if manifest_res.manifest is None and (args.manifest or args.ue_version):
         target = args.manifest or args.ue_version
-        print(f"[manifest] Unable to load manifest '{target}'. Continuing without manifest.")
+        message = manifest_res.failure_reason or f"Unable to load manifest '{target}'. Continuing without manifest."
+        print(f"[manifest] {message}")
     ctx = ProbeContext(
         dry_run=True,
         verbose=args.verbose,
@@ -200,6 +213,7 @@ def handle_verify(args: argparse.Namespace) -> int:
         profile=profile.value,
         manifest=manifest_res.manifest,
     )
+    ctx.manifest_note = manifest_res.note
     scan = run_scan([2], ctx, profile)
     theme = ConsoleTheme(no_color=args.no_color)
     render_console(scan, theme=theme, verbose=True)
@@ -237,6 +251,7 @@ def _prompt_intent() -> str:
     print("  1) Configure dev environment (safe / recommended)")
     print("  2) Build engine/tools (slow; runs Build.bat; opt-in)")
     print("  3) Configure + build (configure first, then build)")
+    print("  4) Register engine (UnrealVersionSelector; safe to re-run)")
     while True:
         choice = input("Select an option [1]: ").strip()
         if not choice or choice == "1":
@@ -245,7 +260,9 @@ def _prompt_intent() -> str:
             return "build"
         if choice == "3":
             return "both"
-        print("Please enter 1, 2, or 3.")
+        if choice == "4":
+            return "register"
+        print("Please enter 1, 2, 3, or 4.")
 
 
 def _prompt_admin_fallback() -> str:
@@ -266,7 +283,9 @@ def handle_setup(args: argparse.Namespace) -> int:
     intent = "configure"
     build_after_config = False
     build_only = False
+    register_only = False
     build_engine_flag = bool(args.build_engine)
+    register_engine_flag = bool(getattr(args, "register_engine", False))
     interactive_prompt_needed = (
         interactive
         and not args.plan
@@ -274,6 +293,7 @@ def handle_setup(args: argparse.Namespace) -> int:
         and args.profile is None
         and not args.build_engine
         and not args.build_targets
+        and not register_engine_flag
     )
     if interactive_prompt_needed:
         intent = _prompt_intent()
@@ -282,13 +302,16 @@ def handle_setup(args: argparse.Namespace) -> int:
             build_only = True
         elif intent == "both":
             build_after_config = True
+        elif intent == "register":
+            register_engine_flag = True
+            register_only = True
 
     profile = resolve_profile(args.profile)
-    skip_profile_prompt = build_only
+    skip_profile_prompt = build_only or register_only
     if args.profile is None and interactive and not skip_profile_prompt and "UECFG_PROFILE" not in os.environ:
         profile = _prompt_profile_choice(profile)
     phases = _resolve_phases(args.phase, profile)
-    if build_only and not args.phase:
+    if (build_only or register_only) and not args.phase:
         phases = [2]
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     pre_log = getattr(args, "_pre_log_path", None)
@@ -298,7 +321,7 @@ def handle_setup(args: argparse.Namespace) -> int:
     ctx_preview = ProbeContext(dry_run=True, verbose=args.verbose, ue_root=args.ue_root)
     winget_available = toolchain_fix.winget_available(ctx_preview)
     use_winget = winget_available if args.use_winget is None else args.use_winget
-    include_horde = False if build_only else args.include_horde
+    include_horde = False if (build_only or register_only) else args.include_horde
     ue_root = args.ue_root
     selected_manifest = args.manifest
     selected_ue_version = args.ue_version
@@ -310,21 +333,24 @@ def handle_setup(args: argparse.Namespace) -> int:
             normalized_targets.extend(parts)
         build_targets = normalized_targets or None
 
-    apply_flag = args.apply or build_only
+    apply_flag = args.apply or build_only or register_engine_flag
     plan_only_flag = args.plan
 
-    if build_only and ue_root is None and interactive:
-        response = input("Enter UE root path (required for build): ").strip().strip('"')
+    if (build_only or register_only or register_engine_flag) and ue_root is None and interactive:
+        response = input("Enter UE root path (required for build/register): ").strip().strip('"')
         if not response:
-            print("[setup] UE root is required for build. Exiting.")
+            print("[setup] UE root is required. Exiting.")
             return 1
         root_path = Path(response)
         if not root_path.exists():
             print(f"[setup] UE root {root_path} does not exist. Exiting.")
             return 1
         ue_root = response
+    elif register_engine_flag and ue_root is None and not interactive:
+        print("[setup] --register-engine requires --ue-root.")
+        return 1
 
-    if not args.apply and interactive and not args.plan and not build_only:
+    if not args.apply and interactive and not args.plan and not build_only and not register_only:
         if winget_available and args.use_winget is None:
             use_winget = _prompt_bool_cli("winget detected. Use it for installs?", True)
         elif not winget_available:
@@ -357,12 +383,18 @@ def handle_setup(args: argparse.Namespace) -> int:
             apply_flag = True
         else:
             apply_flag = False
-    elif not args.apply and not interactive and not args.plan and not build_only:
+    elif not args.apply and not interactive and not args.plan and not build_only and not register_only and not register_engine_flag:
         if not args.plan:
             print("[setup] Non-interactive session detected. Re-run with --apply to execute steps.")
         apply_flag = False
 
-    if interactive and (apply_flag or build_engine_flag) and not getattr(args, "_elevated", False) and not _is_admin():
+    if (
+        interactive
+        and (apply_flag or build_engine_flag)
+        and not getattr(args, "_elevated", False)
+        and not _is_admin()
+        and not register_only
+    ):
         choice = _prompt_admin_fallback()
         if choice == "exit":
             print("[setup] Exiting so you can rerun as admin.")
@@ -373,9 +405,12 @@ def handle_setup(args: argparse.Namespace) -> int:
         plan_only_flag = True
 
     manifest_res = resolve_manifest(manifest=selected_manifest, ue_version=selected_ue_version, ue_root=ue_root)
+    if manifest_res.note:
+        print(f"[manifest] {manifest_res.note}")
     if manifest_res.manifest is None and (selected_manifest or selected_ue_version):
         target = selected_manifest or selected_ue_version
-        print(f"[manifest] Unable to load manifest '{target}'. Continuing without manifest.")
+        message = manifest_res.failure_reason or f"Unable to load manifest '{target}'. Continuing without manifest."
+        print(f"[manifest] {message}")
     no_splash_flag = bool(getattr(args, "no_splash", False))
     no_splash_env = os.environ.get("UECFG_NO_SPLASH") == "1"
     show_splash = bool(interactive and not no_splash_flag and not no_splash_env)
@@ -400,6 +435,7 @@ def handle_setup(args: argparse.Namespace) -> int:
         log_path=log_path,
         manifest=manifest_res.manifest,
         manifest_source=manifest_res.source,
+        manifest_note=manifest_res.note,
         ue_version=selected_ue_version
         or manifest_res.detected_version
         or (manifest_res.manifest.ue_version if manifest_res.manifest else None),
@@ -412,6 +448,7 @@ def handle_setup(args: argparse.Namespace) -> int:
         run_prereqs=getattr(args, "run_prereqs", False),
         build_engine=build_engine_flag,
         build_targets=build_targets,
+        register_engine=register_engine_flag,
     )
     return run_setup(options)
 
@@ -420,9 +457,12 @@ def handle_fix(args: argparse.Namespace) -> int:
     profile = resolve_profile(args.profile)
     phases = _resolve_phases([args.phase], profile)
     manifest_res = resolve_manifest(manifest=args.manifest, ue_version=args.ue_version, ue_root=args.ue_root)
+    if manifest_res.note:
+        print(f"[manifest] {manifest_res.note}")
     if manifest_res.manifest is None and (args.manifest or args.ue_version):
         target = args.manifest or args.ue_version
-        print(f"[manifest] Unable to load manifest '{target}'. Continuing without manifest.")
+        message = manifest_res.failure_reason or f"Unable to load manifest '{target}'. Continuing without manifest."
+        print(f"[manifest] {message}")
     ctx = ProbeContext(
         dry_run=True,
         verbose=args.verbose,
@@ -430,6 +470,7 @@ def handle_fix(args: argparse.Namespace) -> int:
         profile=profile.value,
         manifest=manifest_res.manifest,
     )
+    ctx.manifest_note = manifest_res.note
     vs_plan = vs_fix.plan_vs_modify(ctx, manifest_res.manifest)
     scan = run_scan(phases, ctx, profile)
     actions = collect_actions(scan.results)

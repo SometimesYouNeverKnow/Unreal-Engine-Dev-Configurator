@@ -40,7 +40,8 @@ def check_network_readiness(ctx: ProbeContext) -> CheckResult:
 def check_horde_agent(ctx: ProbeContext) -> CheckResult:
     result = ctx.run_command(["sc", "query", "HordeAgent"], timeout=5)
     installed = "STATE" in result.stdout
-    status = CheckStatus.PASS if installed else CheckStatus.WARN
+    running = "RUNNING" in result.stdout.upper()
+    status = CheckStatus.PASS if running else CheckStatus.WARN
     actions = []
     if not installed:
         actions.append(
@@ -50,11 +51,23 @@ def check_horde_agent(ctx: ProbeContext) -> CheckResult:
                 commands=["<download HordeAgentInstaller.exe>", "Start-Process -Wait .\\HordeAgentInstaller.exe"],
             )
         )
+    elif not running:
+        actions.append(
+            ActionRecommendation(
+                id="horde.start",
+                description="Start the Horde agent service",
+                commands=["sc start HordeAgent"],
+            )
+        )
+    summary = "Horde agent running" if running else "Horde agent service not running"
+    if not installed:
+        summary = "Horde agent not found"
+
     return CheckResult(
         id="horde.agent",
         phase=3,
         status=status,
-        summary="Horde agent service detected" if installed else "Horde agent not found",
+        summary=summary,
         details=result.stdout.strip() or result.stderr.strip() or "Service query failed.",
         evidence=[result.stdout[:200]],
         actions=actions,

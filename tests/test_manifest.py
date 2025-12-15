@@ -24,6 +24,28 @@ def test_resolve_manifest_by_version() -> None:
     resolution = resolve_manifest(manifest=None, ue_version="5.7", ue_root=None)
     assert resolution.manifest is not None
     assert resolution.manifest.id == "ue_5.7"
+    assert resolution.note is None
+
+
+def test_resolve_manifest_patch_version_falls_back_to_minor() -> None:
+    resolution = resolve_manifest(manifest=None, ue_version="5.7.1", ue_root=None)
+    assert resolution.manifest is not None
+    assert resolution.manifest.id == "ue_5.7"
+    assert resolution.note
+
+
+def test_resolve_manifest_patch_version_with_large_patch() -> None:
+    resolution = resolve_manifest(manifest=None, ue_version="5.7.99", ue_root=None)
+    assert resolution.manifest is not None
+    assert resolution.manifest.id == "ue_5.7"
+    assert resolution.note
+
+
+def test_resolve_manifest_missing_minor_reports_available() -> None:
+    resolution = resolve_manifest(manifest=None, ue_version="5.8.1", ue_root=None)
+    assert resolution.manifest is None
+    assert resolution.failure_reason
+    assert "Available" in resolution.failure_reason
 
 
 def test_manifest_compliance_pass(monkeypatch, tmp_path: Path) -> None:
@@ -101,3 +123,11 @@ def test_json_report_contains_manifest_metadata(tmp_path: Path) -> None:
     payload = json.loads(target.read_text(encoding="utf-8"))
     assert payload["metadata"]["manifestId"] == manifest.id
     assert payload["metadata"]["ueVersion"] == manifest.ue_version
+
+
+def test_manifest_note_in_scan_metadata() -> None:
+    manifest = load_manifest_from_path(MANIFEST_DIR / "ue_5.7.json")
+    ctx = ProbeContext(manifest=manifest, dry_run=True)
+    ctx.manifest_note = "Requested UE 5.7.1; using manifest ue_5.7 (UE 5.7)."
+    scan = run_scan([], ctx, Profile.WORKSTATION)
+    assert scan.metadata["manifestNote"] == ctx.manifest_note

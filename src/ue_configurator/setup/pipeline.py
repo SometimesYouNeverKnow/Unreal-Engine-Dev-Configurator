@@ -37,7 +37,9 @@ from ue_configurator.ue.build_targets import (
     missing_targets,
     summarize_plan,
 )
+from ue_configurator.ue.artifact_resolver import ArtifactResolver
 from ue_configurator.ue.ubt_runner import UBTRunner
+from ue_configurator.ue.registration import find_selector, is_engine_registered
 
 
 STATE_FILE = Path(".uecfg_state.json")
@@ -50,6 +52,7 @@ class StepStatus(str, Enum):
     SKIPPED = "SKIPPED"
     BLOCKED = "BLOCKED"
     FAILED = "FAILED"
+    WARN = "WARN"
 
 
 @dataclass
@@ -104,6 +107,7 @@ class SetupOptions:
     profile: Profile = DEFAULT_PROFILE
     manifest: Optional["Manifest"] = None
     manifest_source: Optional[str] = None
+    manifest_note: Optional[str] = None
     ue_version: Optional[str] = None
     manifest_arg: Optional[str] = None
     show_splash: bool = True
@@ -112,6 +116,7 @@ class SetupOptions:
     run_prereqs: bool = False
     build_engine: bool = False
     build_targets: Optional[List[str]] = None
+    register_engine: bool = False
 
 
 class SetupLogger:
@@ -449,6 +454,20 @@ def _build_unreal_steps(ue_root: str, runtime: SetupRuntime) -> List[SetupStep]:
         )
     )
 
+    if runtime.options.register_engine:
+        steps.append(
+            SetupStep(
+                id="ue.register",
+                title="Register engine",
+                phase=2,
+                requires_admin=False,
+                estimated_time=2,
+                description="Run Register.bat to register the source-built engine with Windows.",
+                check=lambda rt: False,
+                apply=lambda rt: _apply_register_engine(rt, path),
+            )
+        )
+
     return steps
 
 
@@ -494,12 +513,13 @@ def _apply_prereq(runtime: SetupRuntime, installer: Path | None) -> StepResult:
 
 
 def _engine_build_ready(ue_root: Path, targets: Optional[List[str]]) -> bool:
-    plan = determine_build_plan(ue_root, targets)
+    plan = determine_build_plan(ue_root, targets, resolver=ArtifactResolver(ue_root))
     return not missing_targets(plan)
 
 
 def _apply_engine_build(runtime: SetupRuntime, ue_root: Path) -> StepResult:
-    plan = determine_build_plan(ue_root, runtime.options.build_targets)
+    resolver = ArtifactResolver(ue_root)
+    plan = determine_build_plan(ue_root, runtime.options.build_targets, resolver=resolver)
     runtime.logger.log(f"[build] UE root: {ue_root}")
     runtime.logger.log(f"[build] Targets: {', '.join(item.target.name for item in plan)}")
     runtime.logger.log(f"[build] Plan: {summarize_plan(plan)}")
@@ -531,6 +551,7 @@ def _apply_engine_build(runtime: SetupRuntime, ue_root: Path) -> StepResult:
         runner=runner,
         logger=runtime.logger.log,
         dry_run=runtime.options.dry_run,
+        resolver=resolver,
     )
     runtime.logger.log(f"[build] Summary: {execution.summary}")
 
@@ -560,6 +581,38 @@ def _find_prereq_installer(ue_root: Path) -> Path | None:
     return None
 
 
+def _apply_register_engine(runtime: SetupRuntime, ue_root: Path | None) -> StepResult:
+    if ue_root is None:
+        return StepResult(StepStatus.BLOCKED, "UE root is required to register the engine.")
+
+    if is_engine_registered(ue_root):
+        runtime.logger.log(f"[register] UE already registered at {ue_root}")
+        return StepResult(StepStatus.SKIPPED, "Engine already registered (registry entry present).")
+
+    selector = find_selector(ue_root)
+    if selector is None:
+        runtime.logger.log("[register] UnrealVersionSelector not found under Engine/Binaries.")
+        return StepResult(
+            StepStatus.WARN,
+            "UnrealVersionSelector not found under Engine/Binaries. Build the editor or locate the tool manually.",
+        )
+
+    if runtime.options.dry_run:
+        runtime.logger.log(f"[dry-run] Would run {selector}")
+        return StepResult(StepStatus.DONE, "Engine registration (dry-run).")
+
+    runtime.logger.log(f"[register] Running {selector}")
+    result = runtime.context.run_command(f'"{selector}"', timeout=600)
+    if result.returncode == 0:
+        runtime.logger.log("[register] UnrealVersionSelector completed.")
+        return StepResult(StepStatus.DONE, "Engine registration completed via UnrealVersionSelector.")
+
+    runtime.logger.log(
+        f"[register] UnrealVersionSelector failed (rc={result.returncode}). stderr={result.stderr or result.stdout}"
+    )
+    return StepResult(StepStatus.WARN, "UnrealVersionSelector failed. See log for details.")
+
+
 def run_setup(options: SetupOptions) -> int:
     maybe_show_splash(options)
     options.log_path = sanitize_path(options.log_path)
@@ -570,6 +623,7 @@ def run_setup(options: SetupOptions) -> int:
         profile=options.profile.value,
         manifest=options.manifest,
     )
+    ctx.manifest_note = options.manifest_note
     ctx.cache["engine_build_targets"] = options.build_targets
     logger = SetupLogger(options.log_path)
     logger.log(f"[setup] Log file: {options.log_path}")
@@ -581,11 +635,15 @@ def run_setup(options: SetupOptions) -> int:
             f"[setup] Using manifest {options.manifest.describe()} "
             f"(fingerprint {options.manifest.fingerprint[:12]}) from {source}"
         )
+        if options.manifest_note:
+            logger.log(f"[setup] {options.manifest_note}")
     elif options.ue_version:
         logger.log(f"[setup] Requested UE version {options.ue_version} but no manifest file was resolved.")
     if options.build_engine:
         targets = ", ".join(options.build_targets) if options.build_targets else "UnrealEditor, ShaderCompileWorker, UnrealPak, CrashReportClient"
         logger.log(f"[setup] Engine build enabled; targets: {targets}")
+    if options.register_engine:
+        logger.log("[setup] Engine registration enabled (--register-engine).")
     options.state_path = sanitize_path(options.state_path)
     state = load_state(options.state_path) if options.resume else SetupState()
 
@@ -617,6 +675,7 @@ def run_setup(options: SetupOptions) -> int:
         return _relaunch_elevated(options, logger)
 
     statuses: Dict[str, StepStatus] = {}
+    step_results: Dict[str, StepResult] = {}
     for step in steps:
         if runtime.state.is_done(step.id):
             statuses[step.id] = StepStatus.DONE
@@ -625,6 +684,7 @@ def run_setup(options: SetupOptions) -> int:
             statuses[step.id] = StepStatus.DONE
             runtime.state.mark_done(step.id)
             save_state(options.state_path, runtime.state)
+            step_results[step.id] = StepResult(StepStatus.DONE, "Already satisfied.")
             continue
         if options.plan_only or not options.apply:
             statuses[step.id] = StepStatus.PENDING
@@ -633,6 +693,7 @@ def run_setup(options: SetupOptions) -> int:
         _print_progress(runtime, steps, statuses, current=step.id)
         result = step.apply(runtime)
         statuses[step.id] = result.status
+        step_results[step.id] = result
         logger.log(f"[setup] Step '{step.title}' -> {result.status.value}: {result.message}")
         if result.status == StepStatus.DONE:
             runtime.state.mark_done(step.id)
@@ -642,6 +703,12 @@ def run_setup(options: SetupOptions) -> int:
     runtime.refresh_scan()
     theme = ConsoleTheme(no_color=options.no_color)
     render_console(runtime.scan, theme=theme, verbose=options.verbose)
+
+    if options.register_engine:
+        reg_status = statuses.get("ue.register", StepStatus.PENDING)
+        reg_message = step_results.get("ue.register", StepResult(reg_status, "Not executed.")).message
+        print(f"Engine registration: {reg_status.value} - {reg_message}")
+
     if options.json_path:
         output_path = sanitize_path(options.json_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)

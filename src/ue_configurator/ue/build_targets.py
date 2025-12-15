@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, List, Sequence
 
+from ue_configurator.ue.artifact_resolver import ArtifactResolver
 from ue_configurator.ue.ubt_runner import UBTRunner, UBTResult, UBTRunnerError
 
 
@@ -30,8 +31,12 @@ DEFAULT_TARGETS: Sequence[BuildTarget] = (
 @dataclass
 class TargetBuildPlan:
     target: BuildTarget
-    binary: Path
+    canonical: Path
+    resolved: Path | None
     built: bool
+    found_via_search: bool
+    pattern: str
+    candidates: list[Path]
     action: str  # "SKIP" or "BUILD"
     result: UBTResult | None = None
     error: str | None = None
@@ -61,7 +66,15 @@ def _resolve_targets(override: Sequence[str] | None) -> Sequence[BuildTarget]:
 
 
 def format_plan_line(item: TargetBuildPlan) -> str:
-    suffix = f"{item.binary}"
+    suffix = f"{item.resolved or item.canonical}"
+    if item.resolved and item.resolved != item.canonical:
+        suffix = f"FOUND (non-canonical): {item.resolved} (expected {item.canonical})"
+        if len(item.candidates) > 1:
+            suffix += f" | Alternatives: {', '.join(str(c) for c in item.candidates[1:5])}"
+    if not item.built and not item.error and not item.resolved:
+        suffix = f"Missing (expected {item.canonical}) | Searched under Engine for {item.pattern}"
+        if item.candidates:
+            suffix += f" | Candidates: {', '.join(str(c) for c in item.candidates)}"
     if item.error:
         suffix += f" ({item.error})"
         if item.result:
@@ -69,13 +82,30 @@ def format_plan_line(item: TargetBuildPlan) -> str:
     return f"{item.status_label}: {item.target.name} [{suffix}]"
 
 
-def determine_build_plan(ue_root: Path, targets: Sequence[str] | None = None) -> List[TargetBuildPlan]:
+def determine_build_plan(
+    ue_root: Path,
+    targets: Sequence[str] | None = None,
+    *,
+    resolver: ArtifactResolver | None = None,
+) -> List[TargetBuildPlan]:
     resolved = _resolve_targets(targets)
     plan: List[TargetBuildPlan] = []
+    artifact_resolver = resolver or ArtifactResolver(ue_root)
     for target in resolved:
-        binary = target.binary_path(ue_root)
-        exists = binary.exists()
-        plan.append(TargetBuildPlan(target=target, binary=binary, built=exists, action="SKIP" if exists else "BUILD"))
+        resolution = artifact_resolver.resolve(target)
+        exists = resolution.found
+        plan.append(
+            TargetBuildPlan(
+                target=target,
+                canonical=resolution.canonical,
+                resolved=resolution.resolved,
+                built=exists,
+                found_via_search=resolution.found_via_search,
+                pattern=resolution.pattern,
+                candidates=resolution.candidates,
+                action="SKIP" if exists else "BUILD",
+            )
+        )
     return plan
 
 
@@ -90,16 +120,18 @@ def build_missing_targets(
     runner: UBTRunner,
     logger: Callable[[str], None],
     dry_run: bool = False,
+    resolver: ArtifactResolver | None = None,
 ) -> BuildExecution:
     """Execute the build plan. Only missing targets are built."""
+    artifact_resolver = resolver or ArtifactResolver(ue_root)
     for item in plan:
         if item.built:
-            logger(f"[build] SKIP {item.target.name} (found {item.binary})")
+            logger(f"[build] SKIP {item.target.name} (found {item.resolved or item.canonical})")
             continue
 
         logger(
             f"[build] BUILD {item.target.name} ({item.target.platform} {item.target.configuration}) "
-            f"-> {item.binary}"
+            f"-> {item.canonical}"
         )
         if dry_run:
             logger("[build] Dry-run enabled; skipping invocation.")
@@ -121,7 +153,19 @@ def build_missing_targets(
             )
             return BuildExecution(plan=plan, failed=True, failed_target=item.target)
 
-        item.built = True
+        post = artifact_resolver.resolve(item.target)
+        item.resolved = post.resolved
+        item.built = post.found
+        item.found_via_search = post.found_via_search
+        item.candidates = post.candidates
+        if not item.built:
+            item.error = (
+                f"Build reported success but {item.target.name} is missing "
+                f"(expected {post.canonical}; searched pattern {post.pattern})"
+            )
+            logger(f"[build] FAIL {item.target.name}: {item.error}")
+            return BuildExecution(plan=plan, failed=True, failed_target=item.target)
+
         logger(
             f"[build] SUCCESS {item.target.name} (exit {result.returncode}) in {result.elapsed:.1f}s "
             f"(cmd: {result.command})"

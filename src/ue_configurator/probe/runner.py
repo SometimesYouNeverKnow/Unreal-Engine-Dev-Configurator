@@ -79,4 +79,7 @@ def run_scan(phases: Sequence[int], ctx: ProbeContext, profile: Profile) -> Scan
         metadata["manifestId"] = manifest.id
         metadata["manifestFingerprint"] = manifest.fingerprint
         metadata["ueVersion"] = manifest.ue_version
+    manifest_note = getattr(ctx, "manifest_note", None)
+    if manifest_note:
+        metadata["manifestNote"] = manifest_note
     return ScanData(metadata=metadata, results=results, phase_modes=phase_modes, profile=profile)

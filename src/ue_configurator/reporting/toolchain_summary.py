@@ -54,6 +54,18 @@ def render_toolchain_summary(scan: ScanData, manifest) -> str:
     if engine:
         lines.append(_line("Engine build completeness", f"{engine.summary} | {engine.details}"))
 
+    shader = _get(scan, "ue.shader-distribution")
+    if shader:
+        lines.append(_line("Shader distribution", f"{shader.summary} | {shader.details}"))
+
+    ddc = _get(scan, "ue.ddc")
+    if ddc:
+        lines.append(_line("DDC", f"{ddc.summary} | {ddc.details}"))
+
+    horde_agent = _get(scan, "horde.agent")
+    if horde_agent:
+        lines.append(_line("Horde agent", f"{horde_agent.summary} | {horde_agent.details}"))
+
     if not lines:
         return ""
 

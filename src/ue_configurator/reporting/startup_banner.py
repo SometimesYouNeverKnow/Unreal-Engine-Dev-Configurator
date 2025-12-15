@@ -29,12 +29,14 @@ def format_startup_banner(
     log_path: Optional[str],
     manifest: Optional[Manifest],
     manifest_source: Optional[str],
+    manifest_note: Optional[str],
     ue_root: Optional[str],
     profile: Profile,
     requires_admin: bool = False,
     plan_steps: Optional[int] = None,
     build_engine: bool = False,
     build_targets: Optional[Sequence[str]] = None,
+    register_engine: bool = False,
 ) -> str:
     now = datetime.now().isoformat(timespec="seconds")
     host = socket.gethostname()
@@ -45,6 +47,8 @@ def format_startup_banner(
     if requires_admin:
         lines.append("NOTE: Some steps may require administrator rights.")
     lines.append(f"Manifest: {_manifest_summary(manifest, manifest_source)}")
+    if manifest_note:
+        lines.append(f"Manifest note: {manifest_note}")
     if ue_root:
         lines.append(f"UE root: {ue_root}")
     if plan_steps is not None:
@@ -56,6 +60,8 @@ def format_startup_banner(
     if build_engine:
         targets = ", ".join(build_targets) if build_targets else "UnrealEditor, ShaderCompileWorker, UnrealPak, CrashReportClient"
         lines.append(f"Engine build: enabled (--build-engine); targets: {targets}")
+    if register_engine:
+        lines.append("Engine registration: enabled (--register-engine)")
     lines.append("What happens: readiness checks, manifest compliance, and guidance. Cancel anytime; rerun is safe.")
     lines.append("Tips: use --help for options; add --verbose for more detail; --run-prereqs to execute redistributables.")
     lines.append("=" * 60)
@@ -94,11 +100,13 @@ def print_startup_banner_for_runtime(runtime: SetupRuntime, command: str, plan_s
         log_path=str(runtime.options.log_path) if runtime.options.log_path else None,
         manifest=runtime.options.manifest,
         manifest_source=runtime.options.manifest_source,
+        manifest_note=runtime.options.manifest_note,
         ue_root=runtime.options.ue_root,
         profile=runtime.options.profile,
         requires_admin=False,
         plan_steps=plan_steps,
         build_engine=runtime.options.build_engine,
         build_targets=runtime.options.build_targets,
+        register_engine=runtime.options.register_engine,
     )
     print(banner)
