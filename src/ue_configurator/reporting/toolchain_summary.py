@@ -27,13 +27,9 @@ def render_toolchain_summary(scan: ScanData, manifest) -> str:
 
     vs = _get(scan, "toolchain.vs")
     if vs:
-        lines.append(
-            _line(
-                "Visual Studio",
-                f"{vs.details} (component verification: {'UNVERIFIED' if 'UNVERIFIED' in vs.message else vs.status.value})",
-            )
-        )
-        if "UNVERIFIED" in vs.message:
+        vs_verification = "UNVERIFIED" if "UNVERIFIED" in vs.summary else vs.status.value
+        lines.append(_line("Visual Studio", f"{vs.details} (component verification: {vs_verification})"))
+        if "UNVERIFIED" in vs.summary:
             notes.append("VS component list unavailable; validated via toolchain artifacts instead.")
 
     msvc = _get(scan, "toolchain.msvc")
