@@ -126,6 +126,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Run UEPrereqSetup/VC++ redistributable installers (silent). Default is detect-only.",
     )
+    setup_parser.add_argument(
+        "--build-engine",
+        action="store_true",
+        help="Build missing Unreal editor/helper binaries via Build.bat after checks pass.",
+    )
+    setup_parser.add_argument(
+        "--build-target",
+        action="append",
+        dest="build_targets",
+        help="Override the default engine targets to build (repeatable).",
+    )
     setup_parser.add_argument("--_elevated", action="store_true", help=argparse.SUPPRESS)
     setup_parser.set_defaults(use_winget=None)
 
@@ -239,6 +250,13 @@ def handle_setup(args: argparse.Namespace) -> int:
     ue_root = args.ue_root
     selected_manifest = args.manifest
     selected_ue_version = args.ue_version
+    build_targets = args.build_targets or None
+    if build_targets:
+        normalized_targets = []
+        for entry in build_targets:
+            parts = [part.strip() for part in entry.split(",") if part.strip()]
+            normalized_targets.extend(parts)
+        build_targets = normalized_targets or None
 
     apply_flag = args.apply
 
@@ -315,6 +333,8 @@ def handle_setup(args: argparse.Namespace) -> int:
         profile=profile,
         elevated=elevated_flag,
         run_prereqs=getattr(args, "run_prereqs", False),
+        build_engine=getattr(args, "build_engine", False),
+        build_targets=build_targets,
     )
     return run_setup(options)
 
@@ -436,16 +456,19 @@ def _relaunch_fix_elevated(args: argparse.Namespace) -> bool:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    command = args.command or "scan"
+    pre_log_path = None
+    if command == "setup":
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        pre_log_path = Path(args.log) if args.log else Path("logs") / f"uecfg_setup_{timestamp}.log"
+        args._pre_log_path = pre_log_path  # type: ignore[attr-defined]
+
+    log_for_lock = pre_log_path if command == "setup" else None
+
     try:
-        with acquire_single_instance_lock("uecfg", None):
-            parser = build_parser()
-            args = parser.parse_args(argv)
-            command = args.command or "scan"
-            pre_log_path = None
-            if command == "setup":
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                pre_log_path = Path(args.log) if args.log else Path("logs") / f"uecfg_setup_{timestamp}.log"
-                args._pre_log_path = pre_log_path  # type: ignore[attr-defined]
+        with acquire_single_instance_lock("uecfg", log_for_lock):
             print(
                 format_minimal_banner(
                     command=command,

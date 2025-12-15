@@ -3,7 +3,7 @@ from __future__ import annotations
 import socket
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Sequence
 
 from ue_configurator import __version__
 from ue_configurator.manifest import Manifest
@@ -33,6 +33,8 @@ def format_startup_banner(
     profile: Profile,
     requires_admin: bool = False,
     plan_steps: Optional[int] = None,
+    build_engine: bool = False,
+    build_targets: Optional[Sequence[str]] = None,
 ) -> str:
     now = datetime.now().isoformat(timespec="seconds")
     host = socket.gethostname()
@@ -51,6 +53,9 @@ def format_startup_banner(
         lines.append(f"Log: {Path(log_path).resolve()}")
     if json_path:
         lines.append(f"JSON report: {Path(json_path).resolve()}")
+    if build_engine:
+        targets = ", ".join(build_targets) if build_targets else "UnrealEditor, ShaderCompileWorker, UnrealPak, CrashReportClient"
+        lines.append(f"Engine build: enabled (--build-engine); targets: {targets}")
     lines.append("What happens: readiness checks, manifest compliance, and guidance. Cancel anytime; rerun is safe.")
     lines.append("Tips: use --help for options; add --verbose for more detail; --run-prereqs to execute redistributables.")
     lines.append("=" * 60)
@@ -93,5 +98,7 @@ def print_startup_banner_for_runtime(runtime: SetupRuntime, command: str, plan_s
         profile=runtime.options.profile,
         requires_admin=False,
         plan_steps=plan_steps,
+        build_engine=runtime.options.build_engine,
+        build_targets=runtime.options.build_targets,
     )
     print(banner)

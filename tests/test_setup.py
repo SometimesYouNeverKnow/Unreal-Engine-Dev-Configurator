@@ -85,6 +85,9 @@ def _make_options(**overrides) -> SetupOptions:
         no_splash_flag=False,
         vs_passive=True,
         elevated=False,
+        run_prereqs=False,
+        build_engine=False,
+        build_targets=None,
     )
     defaults.update(overrides)
     return SetupOptions(**defaults)

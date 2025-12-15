@@ -72,6 +72,13 @@ uecfg setup --resume --apply --phase 1 --phase 2 --ue-root D:\UnrealEngine
 
 - Use `run_setup.bat --no-pause ...` or set `UECFG_NO_PAUSE=1` if you do not want the launcher to wait for a key press at the end.
 
+Making a source build runnable (ShaderCompileWorker etc.)
+--------------------------------------------------------
+- Phase 2 now reports **Engine Build Completeness** with PASS/WARN outcomes for the default Win64 Development targets (UnrealEditor, ShaderCompileWorker, UnrealPak, CrashReportClient).
+- Run `uecfg setup --apply --phase 2 --ue-root D:\UnrealEngine --build-engine` to build only the missing binaries via `Engine/Build/BatchFiles/Build.bat <Target> Win64 Development -WaitMutex`. Existing binaries are skipped; failures stop the sequence and point to the log.
+- Override the target list with repeated `--build-target <Name>` flags when you need a narrower build (e.g., only ShaderCompileWorker).
+- Re-run safely after interruptions; the summary prints SKIP/BUILD per target plus the log path.
+
 Profiles
 --------
 - Select machine roles with `--profile` (or set `UECFG_PROFILE=agent`):
@@ -106,13 +113,13 @@ CLI overview
 uecfg scan [--phase 0 --phase 1 --phase 2 --phase 3] [--ue-root <path>] [--ue-version <x.y>] [--manifest <file>] [--dry-run] [--json <path>] [--verbose] [--no-color]
 uecfg fix  --phase <n> [--apply] [--dry-run]
 uecfg verify --ue-root <path> [--ue-version <x.y>] [--json <path>] [--dry-run]
-uecfg setup [--phase ...] [--plan] [--apply] [--resume] [--ue-root <path>] [--ue-version <x.y>] [--manifest <file>] [--include-horde]
+uecfg setup [--phase ...] [--plan] [--apply] [--resume] [--ue-root <path>] [--ue-version <x.y>] [--manifest <file>] [--include-horde] [--build-engine] [--build-target <Name>]
 ```
 
 - `scan` runs audit probes. By default phases 0-2 execute; include `--phase 3` to opt into the Horde/UBA checks. Add `--ue-version 5.7` (or `--manifest manifests\ue_5.7.json`) to require manifest compliance.
 - `fix` surfaces recommended actions for the requested phase and, when `--apply` is present, performs guarded helpers such as generating Horde templates or modifying Visual Studio to match a manifest. Without `--apply`, commands are only printed. Use `--vs-interactive` if you want the Visual Studio Installer UI instead of the passive mode.
 - `verify` focuses on a provided Unreal Engine source root and ensures `Setup.bat`, `GenerateProjectFiles.bat`, and redist installers are ready to run.
-- `setup` orchestrates scans, installs, confirmations, elevation, and resume-friendly state tracking. Use `--plan` to see the plan, `--apply` to skip prompts, and `--resume` to continue after manual steps. When `--ue-version` is present (or detected), every step references the manifest so reruns stay deterministic. Control Visual Studio Installer mode with `--vs-interactive` / `--vs-passive`.
+- `setup` orchestrates scans, installs, confirmations, elevation, and resume-friendly state tracking. Use `--plan` to see the plan, `--apply` to skip prompts, and `--resume` to continue after manual steps. When `--ue-version` is present (or detected), every step references the manifest so reruns stay deterministic. Control Visual Studio Installer mode with `--vs-interactive` / `--vs-passive`. Engine builds stay opt-in; add `--build-engine` (and optional `--build-target`) to build missing editor/helper binaries via Build.bat.
 
 Every command accepts `--dry-run` (default) to prevent writes, `--json <path>` to emit machine logs, `--verbose` for detailed evidence, and `--no-color` to disable ANSI styling.
 

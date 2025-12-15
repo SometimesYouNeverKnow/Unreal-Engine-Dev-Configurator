@@ -11,6 +11,7 @@ except ImportError:  # pragma: no cover
     winreg = None
 
 from .base import ActionRecommendation, CheckResult, CheckStatus, ProbeContext
+from ue_configurator.ue.build_targets import determine_build_plan, missing_targets, summarize_plan
 
 
 def check_ue_root(ctx: ProbeContext) -> CheckResult:
@@ -248,6 +249,49 @@ def check_build_commands(ctx: ProbeContext) -> CheckResult:
                 commands=[commands[0]],
             )
         ],
+        )
+
+
+def check_engine_build(ctx: ProbeContext) -> CheckResult:
+    ue_path: Path | None = ctx.cache.get("ue_root_path")
+    if ue_path is None:
+        return CheckResult(
+            id="ue.engine-build",
+            phase=2,
+            status=CheckStatus.SKIP,
+            summary="Engine Build Completeness: SKIP",
+            details="Provide --ue-root to verify UnrealEditor/ShaderCompileWorker/UnrealPak/CrashReportClient binaries.",
+            evidence=[],
+            actions=[],
+        )
+
+    targets_override = ctx.cache.get("engine_build_targets")
+    plan = determine_build_plan(ue_path, targets_override)
+    missing = missing_targets(plan)
+    status = CheckStatus.PASS if not missing else CheckStatus.WARN
+    summary = f"Engine Build Completeness: {status.value}"
+    details = summarize_plan(plan)
+    actions: list[ActionRecommendation] = []
+    if missing:
+        missing_list = ", ".join(item.target.name for item in missing)
+        details = f"Missing: {missing_list} | {details}"
+        actions.append(
+            ActionRecommendation(
+                id="ue.build-engine",
+                description="Build missing engine binaries via Build.bat",
+                commands=[f'uecfg setup --apply --build-engine --ue-root "{ue_path}"'],
+            )
+        )
+
+    evidence = [str(item.binary) for item in plan]
+    return CheckResult(
+        id="ue.engine-build",
+        phase=2,
+        status=status,
+        summary=summary,
+        details=details,
+        evidence=evidence,
+        actions=actions,
     )
 
 
@@ -255,5 +299,6 @@ PHASE2_PROBES = [
     check_ue_root,
     check_setup_scripts,
     check_redist_installer,
+    check_engine_build,
     check_build_commands,
 ]

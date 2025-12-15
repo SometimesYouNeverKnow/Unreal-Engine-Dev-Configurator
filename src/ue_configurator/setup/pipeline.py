@@ -31,6 +31,13 @@ from ue_configurator.report.console import render_console
 from ue_configurator.report.json_report import write_json
 from ue_configurator.report.common import ConsoleTheme
 from ue_configurator.setup.splash import maybe_show_splash
+from ue_configurator.ue.build_targets import (
+    build_missing_targets,
+    determine_build_plan,
+    missing_targets,
+    summarize_plan,
+)
+from ue_configurator.ue.ubt_runner import UBTRunner
 
 
 STATE_FILE = Path(".uecfg_state.json")
@@ -102,8 +109,9 @@ class SetupOptions:
     show_splash: bool = True
     no_splash_flag: bool = False
     vs_passive: bool = True
-    elevated: bool = False
     run_prereqs: bool = False
+    build_engine: bool = False
+    build_targets: Optional[List[str]] = None
 
 
 class SetupLogger:
@@ -428,6 +436,19 @@ def _build_unreal_steps(ue_root: str, runtime: SetupRuntime) -> List[SetupStep]:
         )
     )
 
+    steps.append(
+        SetupStep(
+            id="ue.engine-build",
+            title="Engine build completeness",
+            phase=2,
+            requires_admin=False,
+            estimated_time=45,
+            description="Detect missing UE editor/helper binaries and build them via Build.bat (-WaitMutex).",
+            check=lambda rt: _engine_build_ready(path, rt.options.build_targets),
+            apply=lambda rt: _apply_engine_build(rt, path),
+        )
+    )
+
     return steps
 
 
@@ -472,6 +493,56 @@ def _apply_prereq(runtime: SetupRuntime, installer: Path | None) -> StepResult:
     )
 
 
+def _engine_build_ready(ue_root: Path, targets: Optional[List[str]]) -> bool:
+    plan = determine_build_plan(ue_root, targets)
+    return not missing_targets(plan)
+
+
+def _apply_engine_build(runtime: SetupRuntime, ue_root: Path) -> StepResult:
+    plan = determine_build_plan(ue_root, runtime.options.build_targets)
+    runtime.logger.log(f"[build] UE root: {ue_root}")
+    runtime.logger.log(f"[build] Targets: {', '.join(item.target.name for item in plan)}")
+    runtime.logger.log(f"[build] Plan: {summarize_plan(plan)}")
+    missing = missing_targets(plan)
+    if not missing:
+        runtime.logger.log("[build] All required binaries already present.")
+        runtime.logger.log("[build] Final status: OK (already built)")
+        return StepResult(StepStatus.DONE, "Engine binaries already built.")
+
+    if not runtime.options.build_engine:
+        runtime.logger.log("[build] Build disabled (--build-engine not set).")
+        runtime.logger.log(f"[build] Missing: {', '.join(item.target.name for item in missing)}")
+        runtime.logger.log("[build] Final status: SKIPPED (--build-engine not set)")
+        return StepResult(
+            StepStatus.BLOCKED,
+            f"{summarize_plan(plan)} | Missing binaries: {', '.join(item.target.name for item in missing)}. "
+            "Re-run with --build-engine to build via Build.bat.",
+        )
+
+    if runtime.options.dry_run:
+        runtime.logger.log("[build] Dry-run: would invoke Build.bat for missing targets.")
+        runtime.logger.log("[build] Final status: DRY-RUN")
+        return StepResult(StepStatus.DONE, summarize_plan(plan))
+
+    runner = UBTRunner(ue_root)
+    execution = build_missing_targets(
+        ue_root,
+        plan,
+        runner=runner,
+        logger=runtime.logger.log,
+        dry_run=runtime.options.dry_run,
+    )
+    runtime.logger.log(f"[build] Summary: {execution.summary}")
+
+    if execution.failed:
+        target = execution.failed_target.name if execution.failed_target else "unknown"
+        message = f"Build failed for {target}. {execution.summary} See log at {runtime.options.log_path}."
+        return StepResult(StepStatus.FAILED, message)
+
+    runtime.logger.log("[build] Final status: OK")
+    return StepResult(StepStatus.DONE, f"{execution.summary} | status=OK")
+
+
 def _find_prereq_installer(ue_root: Path) -> Path | None:
     """Locate prereq installer under Engine/Extras/Redist (any locale)."""
     search_root = ue_root / "Engine" / "Extras" / "Redist"
@@ -499,6 +570,7 @@ def run_setup(options: SetupOptions) -> int:
         profile=options.profile.value,
         manifest=options.manifest,
     )
+    ctx.cache["engine_build_targets"] = options.build_targets
     logger = SetupLogger(options.log_path)
     logger.log(f"[setup] Log file: {options.log_path}")
     if options.elevated:
@@ -511,6 +583,9 @@ def run_setup(options: SetupOptions) -> int:
         )
     elif options.ue_version:
         logger.log(f"[setup] Requested UE version {options.ue_version} but no manifest file was resolved.")
+    if options.build_engine:
+        targets = ", ".join(options.build_targets) if options.build_targets else "UnrealEditor, ShaderCompileWorker, UnrealPak, CrashReportClient"
+        logger.log(f"[setup] Engine build enabled; targets: {targets}")
     options.state_path = sanitize_path(options.state_path)
     state = load_state(options.state_path) if options.resume else SetupState()
 
@@ -650,6 +725,11 @@ def _reconstruct_cli_args(options: SetupOptions, *, include_elevation_flag: bool
         args.append("--no-splash")
     if not options.vs_passive:
         args.append("--vs-interactive")
+    if options.build_engine:
+        args.append("--build-engine")
+    if options.build_targets:
+        for target in options.build_targets:
+            args.extend(["--build-target", target])
     if include_elevation_flag or options.elevated:
         args.append("--_elevated")
     return args

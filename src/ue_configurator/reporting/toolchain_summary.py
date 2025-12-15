@@ -50,6 +50,10 @@ def render_toolchain_summary(scan: ScanData, manifest) -> str:
     if redist:
         lines.append(_line("VC++ Redist", redist.details))
 
+    engine = _get(scan, "ue.engine-build")
+    if engine:
+        lines.append(_line("Engine build completeness", f"{engine.summary} | {engine.details}"))
+
     if not lines:
         return ""
 
