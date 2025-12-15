@@ -275,17 +275,40 @@ def check_dotnet(ctx: ProbeContext) -> CheckResult:
 
 
 def _detect_tool(tool: str, ctx: ProbeContext) -> List[str]:
+    """Find tool via PATH and common winget install locations."""
     cache_key = f"where::{tool.lower()}"
     cached = ctx.cache.get(cache_key)
     if cached is not None:
         return cached
+
+    paths: List[str] = []
+
+    # Primary: PATH lookup
     result = ctx.run_command(["where", tool], timeout=5)
-    if result.returncode != 0:
-        ctx.cache[cache_key] = []
-        return []
-    paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-    ctx.cache[cache_key] = paths
-    return paths
+    if result.returncode == 0:
+        paths.extend([line.strip() for line in result.stdout.splitlines() if line.strip()])
+
+    # Secondary: common install roots (winget/choco), in case PATH is stale
+    winget_roots = [
+        "C:\\Program Files\\CMake\\bin",
+        "C:\\Program Files (x86)\\CMake\\bin",
+        "C:\\ProgramData\\chocolatey\\bin",
+    ]
+    for root in winget_roots:
+        candidate = Path(root) / tool
+        if candidate.exists():
+            paths.append(str(candidate))
+
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    unique_paths: List[str] = []
+    for p in paths:
+        if p not in seen:
+            seen.add(p)
+            unique_paths.append(p)
+
+    ctx.cache[cache_key] = unique_paths
+    return unique_paths
 
 
 def check_cmake_ninja(ctx: ProbeContext) -> CheckResult:
@@ -293,9 +316,9 @@ def check_cmake_ninja(ctx: ProbeContext) -> CheckResult:
     ninja_paths = _detect_tool("ninja.exe", ctx)
     missing = []
     if not cmake_paths:
-        missing.append("CMake")
+        missing.append("CMake (not on PATH; checked where.exe and common install locations)")
     if not ninja_paths:
-        missing.append("Ninja")
+        missing.append("Ninja (not on PATH; checked where.exe and common install locations)")
     status = CheckStatus.PASS if not missing else CheckStatus.WARN
     actions = []
     if missing and _winget_available(ctx):
@@ -337,7 +360,7 @@ def check_cmake_ninja(ctx: ProbeContext) -> CheckResult:
         phase=1,
         status=status,
         summary="CMake/Ninja detected" if status == CheckStatus.PASS else "CMake/Ninja missing",
-        details="; ".join(details) if details else "Tools not found via where.exe.",
+        details="; ".join(details) if details else "Tools not found via PATH or common install locations.",
         evidence=cmake_paths + ninja_paths,
         actions=actions,
     )

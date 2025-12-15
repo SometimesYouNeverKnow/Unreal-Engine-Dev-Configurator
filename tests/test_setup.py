@@ -7,6 +7,7 @@ from pathlib import Path
 from ue_configurator.profile import Profile
 from ue_configurator.probe.base import ActionRecommendation, CheckResult, CheckStatus, CommandResult, ProbeContext
 from ue_configurator.probe.runner import ScanData
+from ue_configurator.probe.toolchain import check_cmake_ninja
 from ue_configurator.setup.pipeline import (
     SetupOptions,
     SetupRuntime,
@@ -16,6 +17,7 @@ from ue_configurator.setup.pipeline import (
     StepStatus,
     build_steps,
     sanitize_path,
+    _find_prereq_installer,
     _needs_admin,
     SetupLogger,
 )
@@ -136,6 +138,29 @@ def test_sanitize_path_handles_quotes() -> None:
     assert sanitize_path('"C:\\tmp\\logs"') == Path(r"C:\tmp\logs")
     assert sanitize_path("C:\\tmp\\logs\"") == Path(r"C:\tmp\logs")
     assert sanitize_path('"C:\\tmp\\my logs\\file.log"') == Path(r"C:\tmp\my logs\file.log")
+
+
+def test_detect_toolchain_missing_message_includes_path_hint(monkeypatch) -> None:
+    ctx = ProbeContext(dry_run=True)
+
+    def fake_run_command(args, timeout=5):
+        return CommandResult(args, "", "", 1)
+
+    monkeypatch.setattr(ctx, "run_command", fake_run_command)
+    result = check_cmake_ninja(ctx)
+    assert result.status == CheckStatus.WARN
+    assert "common install locations" in result.details
+
+
+def test_prereq_finder_alternate_locale(tmp_path: Path) -> None:
+    ue_root = tmp_path
+    alt_locale = ue_root / "Engine" / "Extras" / "Redist" / "fr-fr"
+    alt_locale.mkdir(parents=True)
+    target = alt_locale / "UEPrereqSetup_x64.exe"
+    target.write_text("stub")
+
+    found = _find_prereq_installer(ue_root)
+    assert found == target
 
 
 def test_setup_logger_sanitizes_path(tmp_path: Path) -> None:

@@ -381,7 +381,7 @@ def _build_unreal_steps(ue_root: str, runtime: SetupRuntime) -> List[SetupStep]:
 
     setup_bat = path / "Setup.bat"
     gpf_bat = path / "GenerateProjectFiles.bat"
-    prereq_installer = path / "Engine" / "Extras" / "Redist" / "en-us" / "UEPrereqSetup_x64.exe"
+    prereq_installer = _find_prereq_installer(path)
 
     steps.append(
         SetupStep(
@@ -429,6 +429,16 @@ def _apply_horde_template(runtime: SetupRuntime) -> StepResult:
     target = horde_fix.generate_build_configuration(runtime.context)
     runtime.logger.log(f"[setup] Horde template prepared at {target}")
     return StepResult(StepStatus.DONE, "Horde template generated.")
+
+
+def _find_prereq_installer(ue_root: Path) -> Path | None:
+    """Locate UEPrereqSetup_x64.exe under Engine/Extras/Redist (any locale)."""
+    search_root = ue_root / "Engine" / "Extras" / "Redist"
+    if not search_root.exists():
+        return None
+    for exe in search_root.rglob("UEPrereqSetup_x64.exe"):
+        return exe
+    return None
 
 
 def run_setup(options: SetupOptions) -> int:

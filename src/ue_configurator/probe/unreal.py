@@ -107,8 +107,14 @@ def check_redist_installer(ctx: ProbeContext) -> CheckResult:
             actions=[],
         )
 
-    installer = ue_path / "Engine" / "Extras" / "Redist" / "en-us" / "UEPrereqSetup_x64.exe"
-    exists = installer.exists()
+    installer = None
+    redist_root = ue_path / "Engine" / "Extras" / "Redist"
+    if redist_root.exists():
+        for exe in redist_root.rglob("UEPrereqSetup_x64.exe"):
+            installer = exe
+            break
+
+    exists = installer is not None and installer.exists()
     status = CheckStatus.PASS if exists else CheckStatus.WARN
     actions = []
     if not exists:
@@ -124,8 +130,8 @@ def check_redist_installer(ctx: ProbeContext) -> CheckResult:
         phase=2,
         status=status,
         summary="UE prerequisites installer located" if exists else "UE prerequisites missing",
-        details=str(installer),
-        evidence=[str(installer)],
+        details=str(installer) if installer else str(redist_root / "UEPrereqSetup_x64.exe"),
+        evidence=[str(installer)] if installer else [str(redist_root)],
         actions=actions,
     )
 
