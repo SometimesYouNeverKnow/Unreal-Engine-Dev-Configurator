@@ -17,12 +17,18 @@ from ue_configurator.fix import toolchain as toolchain_fix
 from ue_configurator.fix import visual_studio as vs_fix
 from ue_configurator.manifest import available_manifests, resolve_manifest
 from ue_configurator.profile import DEFAULT_PHASES, Profile, resolve_profile
+from ue_configurator.runtime.single_instance import (
+    SingleInstanceError,
+    acquire_single_instance_lock,
+)
 from ue_configurator.setup.pipeline import SetupOptions, run_setup
 from ue_configurator.probe.base import ProbeContext
 from ue_configurator.probe.runner import PHASE_MAP, run_scan
 from ue_configurator.report.common import ConsoleTheme, collect_actions
 from ue_configurator.report.console import render_console
 from ue_configurator.report.json_report import write_json
+from ue_configurator.reporting.toolchain_summary import render_toolchain_summary
+from ue_configurator.reporting.startup_banner import format_startup_banner, format_minimal_banner
 
 
 def _add_global_flags(parser: argparse.ArgumentParser) -> None:
@@ -115,6 +121,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Force the Visual Studio Installer UI during VS component installs.",
     )
+    setup_parser.add_argument(
+        "--run-prereqs",
+        action="store_true",
+        help="Run UEPrereqSetup/VC++ redistributable installers (silent). Default is detect-only.",
+    )
     setup_parser.add_argument("--_elevated", action="store_true", help=argparse.SUPPRESS)
     setup_parser.set_defaults(use_winget=None)
 
@@ -141,9 +152,25 @@ def handle_scan(args: argparse.Namespace) -> int:
         profile=profile.value,
         manifest=manifest_res.manifest,
     )
+    banner = format_startup_banner(
+        ctx,
+        command="scan",
+        phases=phases,
+        apply=False,
+        json_path=args.json,
+        log_path=None,
+        manifest=manifest_res.manifest,
+        manifest_source=manifest_res.source,
+        ue_root=args.ue_root,
+        profile=profile,
+    )
+    print(banner, flush=True)
     scan = run_scan(phases, ctx, profile)
     theme = ConsoleTheme(no_color=args.no_color)
     render_console(scan, theme=theme, verbose=args.verbose)
+    summary = render_toolchain_summary(scan, manifest_res.manifest)
+    if summary:
+        print(summary)
     if args.json:
         write_json(scan, args.json)
     return 0
@@ -201,7 +228,8 @@ def handle_setup(args: argparse.Namespace) -> int:
         profile = _prompt_profile_choice(profile)
     phases = _resolve_phases(args.phase, profile)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = Path(args.log) if args.log else Path("logs") / f"uecfg_setup_{timestamp}.log"
+    pre_log = getattr(args, "_pre_log_path", None)
+    log_path = pre_log if pre_log is not None else (Path(args.log) if args.log else Path("logs") / f"uecfg_setup_{timestamp}.log")
     json_path = args.json or str(Path("reports") / f"uecfg_report_{timestamp}.json")
 
     ctx_preview = ProbeContext(dry_run=True, verbose=args.verbose, ue_root=args.ue_root)
@@ -286,6 +314,7 @@ def handle_setup(args: argparse.Namespace) -> int:
         no_splash_flag=no_splash_flag or no_splash_env,
         profile=profile,
         elevated=elevated_flag,
+        run_prereqs=getattr(args, "run_prereqs", False),
     )
     return run_setup(options)
 
@@ -407,18 +436,38 @@ def _relaunch_fix_elevated(args: argparse.Namespace) -> bool:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if args.command == "scan":
-        return handle_scan(args)
-    if args.command == "verify":
-        return handle_verify(args)
-    if args.command == "fix":
-        return handle_fix(args)
-    if args.command == "setup":
-        return handle_setup(args)
-    parser.error("Unknown command")
-    return 1
+    try:
+        with acquire_single_instance_lock("uecfg", None):
+            parser = build_parser()
+            args = parser.parse_args(argv)
+            command = args.command or "scan"
+            pre_log_path = None
+            if command == "setup":
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                pre_log_path = Path(args.log) if args.log else Path("logs") / f"uecfg_setup_{timestamp}.log"
+                args._pre_log_path = pre_log_path  # type: ignore[attr-defined]
+            print(
+                format_minimal_banner(
+                    command=command,
+                    json_path=getattr(args, "json", None),
+                    log_path=str(pre_log_path) if pre_log_path else None,
+                    ue_root=getattr(args, "ue_root", None),
+                ),
+                flush=True,
+            )
+            if args.command == "scan":
+                return handle_scan(args)
+            if args.command == "verify":
+                return handle_verify(args)
+            if args.command == "fix":
+                return handle_fix(args)
+            if args.command == "setup":
+                return handle_setup(args)
+            parser.error("Unknown command")
+            return 1
+    except SingleInstanceError as err:
+        print(err.user_message)
+        return 2
 
 
 if __name__ == "__main__":
