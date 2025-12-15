@@ -103,6 +103,7 @@ class SetupOptions:
     no_splash_flag: bool = False
     vs_passive: bool = True
     elevated: bool = False
+    run_prereqs: bool = False
 
 
 class SetupLogger:
@@ -348,7 +349,12 @@ def _build_unreal_steps(ue_root: str, runtime: SetupRuntime) -> List[SetupStep]:
         result = unreal_probe.check_setup_scripts(rt.context)
         return result.status == CheckStatus.PASS
 
-    def run_batch(rt: SetupRuntime, script: Path, label: str) -> StepResult:
+    def run_batch(rt: SetupRuntime, script: Path | None, label: str) -> StepResult:
+        if script is None:
+            return StepResult(
+                StepStatus.BLOCKED,
+                f"{label} missing (UEPrereqSetup_x64.exe not found under Engine/Extras/Redist).",
+            )
         if not script.exists():
             return StepResult(StepStatus.BLOCKED, f"{label} missing.")
         if rt.options.dry_run:
@@ -416,9 +422,9 @@ def _build_unreal_steps(ue_root: str, runtime: SetupRuntime) -> List[SetupStep]:
             phase=2,
             requires_admin=True,
             estimated_time=5,
-            description="Run UEPrereqSetup_x64.exe from Engine/Extras/Redist.",
+            description="Locate UEPrereqSetup_x64.exe (or vc_redist.x64.exe fallback); only run when --run-prereqs is set.",
             check=lambda rt: rt.state.is_done("ue.run-prereq"),
-            apply=lambda rt: run_batch(rt, prereq_installer, "UE prerequisites installer"),
+            apply=lambda rt: _apply_prereq(rt, prereq_installer),
         )
     )
 
@@ -431,13 +437,55 @@ def _apply_horde_template(runtime: SetupRuntime) -> StepResult:
     return StepResult(StepStatus.DONE, "Horde template generated.")
 
 
+def _apply_prereq(runtime: SetupRuntime, installer: Path | None) -> StepResult:
+    if installer is None:
+        return StepResult(
+            StepStatus.BLOCKED,
+            "UE prerequisites installer missing under Engine/Extras/Redist.",
+        )
+    if not runtime.options.run_prereqs:
+        return StepResult(
+            StepStatus.DONE,
+            f"Prereq installer located at {installer}. Not run by default; rerun with --run-prereqs to execute silently.",
+        )
+
+    if runtime.options.dry_run:
+        runtime.logger.log(f"[dry-run] Would run {installer}")
+        return StepResult(StepStatus.DONE, "UE prerequisites (dry-run).")
+
+    args: Sequence[str]
+    if installer.name.lower().startswith("vc_redist"):
+        args = [f'"{installer}"', "/install", "/quiet", "/norestart"]
+    else:
+        args = [f'"{installer}"']
+
+    result = runtime.context.run_command(" ".join(args), timeout=3600)
+    if result.returncode in (0, 3010):  # 3010 = restart required
+        runtime.logger.log(f"[setup] Prerequisites installer exited {result.returncode}.")
+        return StepResult(StepStatus.DONE, "UE prerequisites installed.")
+    if result.returncode == 1638:  # already installed
+        runtime.logger.log("[setup] Prerequisites installer reports already installed (1638).")
+        return StepResult(StepStatus.DONE, "UE prerequisites already installed.")
+    return StepResult(
+        StepStatus.FAILED,
+        f"Prerequisites installer failed with exit code {result.returncode}.",
+    )
+
+
 def _find_prereq_installer(ue_root: Path) -> Path | None:
-    """Locate UEPrereqSetup_x64.exe under Engine/Extras/Redist (any locale)."""
+    """Locate prereq installer under Engine/Extras/Redist (any locale)."""
     search_root = ue_root / "Engine" / "Extras" / "Redist"
     if not search_root.exists():
         return None
-    for exe in search_root.rglob("UEPrereqSetup_x64.exe"):
-        return exe
+    # Priority: UEPrereqSetup_x64.exe, then vc_redist.x64.exe, then vc_redist.arm64.exe
+    candidates = [
+        "UEPrereqSetup_x64.exe",
+        "vc_redist.x64.exe",
+        "vc_redist.arm64.exe",
+    ]
+    for name in candidates:
+        for exe in search_root.rglob(name):
+            return exe
     return None
 
 
@@ -469,6 +517,8 @@ def run_setup(options: SetupOptions) -> int:
     logger.log("[setup] Running initial readiness scan...")
     scan = run_scan(options.phases, ctx, options.profile)
     runtime = SetupRuntime(options=options, logger=logger, context=ctx, scan=scan, state=state)
+    from ue_configurator.reporting.startup_banner import print_startup_banner_for_runtime
+    print_startup_banner_for_runtime(runtime, "setup", plan_steps=None)
 
     steps = build_steps(runtime)
     if not steps:
@@ -476,6 +526,10 @@ def run_setup(options: SetupOptions) -> int:
 
     _print_plan(runtime, steps)
     if options.plan_only:
+        from ue_configurator.reporting.toolchain_summary import render_toolchain_summary
+        summary = render_toolchain_summary(runtime.scan, runtime.options.manifest)
+        if summary:
+            print(summary)
         return 0
 
     if not options.apply:

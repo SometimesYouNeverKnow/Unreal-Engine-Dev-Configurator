@@ -7,6 +7,8 @@ from pathlib import Path
 from ue_configurator.profile import Profile
 from ue_configurator.probe.base import ActionRecommendation, CheckResult, CheckStatus, CommandResult, ProbeContext
 from ue_configurator.probe.runner import ScanData
+import ue_configurator.probe.unreal as unreal_probe
+from ue_configurator.probe.unreal import check_redist_installer
 from ue_configurator.probe.toolchain import check_cmake_ninja
 from ue_configurator.setup.pipeline import (
     SetupOptions,
@@ -18,9 +20,13 @@ from ue_configurator.setup.pipeline import (
     build_steps,
     sanitize_path,
     _find_prereq_installer,
+    _apply_prereq,
     _needs_admin,
     SetupLogger,
 )
+import ue_configurator.cli as cli
+import io
+import sys
 from ue_configurator.setup.splash import maybe_show_splash
 from types import SimpleNamespace
 
@@ -161,6 +167,143 @@ def test_prereq_finder_alternate_locale(tmp_path: Path) -> None:
 
     found = _find_prereq_installer(ue_root)
     assert found == target
+
+
+def test_prereq_finder_vc_redist_fallback(tmp_path: Path) -> None:
+    ue_root = tmp_path
+    alt_locale = ue_root / "Engine" / "Extras" / "Redist" / "en-us"
+    alt_locale.mkdir(parents=True)
+    target = alt_locale / "vc_redist.x64.exe"
+    target.write_text("stub")
+
+    found = _find_prereq_installer(ue_root)
+    assert found == target
+
+
+def test_redist_probe_reports_vc_redist_fallback(tmp_path: Path) -> None:
+    ue_root = tmp_path
+    alt_locale = ue_root / "Engine" / "Extras" / "Redist" / "en-us"
+    alt_locale.mkdir(parents=True)
+    target = alt_locale / "vc_redist.x64.exe"
+    target.write_text("stub")
+
+    ctx = ProbeContext(dry_run=True)
+    ctx.cache["ue_root_path"] = ue_root
+    result = check_redist_installer(ctx)
+    assert result.status == CheckStatus.WARN
+    assert "fallback" in result.details
+
+
+def test_redist_probe_reports_installed_versions(monkeypatch, tmp_path: Path) -> None:
+    ue_root = tmp_path
+    alt_locale = ue_root / "Engine" / "Extras" / "Redist" / "en-us"
+    alt_locale.mkdir(parents=True)
+    target = alt_locale / "vc_redist.x64.exe"
+    target.write_text("stub")
+
+    ctx = ProbeContext(dry_run=True)
+    ctx.cache["ue_root_path"] = ue_root
+    monkeypatch.setattr(unreal_probe, "_detect_installed_redist", lambda: ["14.30.30704.0"])
+    result = check_redist_installer(ctx)
+    assert result.status == CheckStatus.PASS
+    assert "14.30.30704.0" in result.details
+
+
+class DummyContext:
+    def __init__(self):
+        self.calls = []
+
+    def run_command(self, cmd, timeout=3600):
+        self.calls.append((cmd, timeout))
+        class Result:
+            returncode = 3010
+        return Result()
+
+
+def test_prereq_apply_not_run_by_default(tmp_path: Path) -> None:
+    installer = tmp_path / "vc_redist.x64.exe"
+    installer.write_text("stub")
+    options = SetupOptions(
+        phases=[0, 1, 2],
+        apply=True,
+        resume=False,
+        plan_only=False,
+        include_horde=False,
+        use_winget=True,
+        ue_root=str(tmp_path),
+        dry_run=False,
+        verbose=False,
+        no_color=True,
+        json_path=None,
+        log_path=tmp_path / "log.txt",
+    )
+    options.run_prereqs = False
+    runtime = SetupRuntime(
+        options=options,
+        logger=SetupLogger(tmp_path / "log.txt"),
+        context=ProbeContext(dry_run=True),
+        scan=ScanData(metadata={}, results={}, phase_modes={}, profile=Profile.WORKSTATION),
+        state=SetupState(),
+    )
+    result = _apply_prereq(runtime, installer)
+    assert result.status == StepStatus.DONE
+    assert "Not run" in result.message
+
+
+def test_prereq_apply_runs_silent_for_vc_redist(tmp_path: Path) -> None:
+    installer = tmp_path / "vc_redist.x64.exe"
+    installer.write_text("stub")
+    options = SetupOptions(
+        phases=[0, 1, 2],
+        apply=True,
+        resume=False,
+        plan_only=False,
+        include_horde=False,
+        use_winget=True,
+        ue_root=str(tmp_path),
+        dry_run=False,
+        verbose=False,
+        no_color=True,
+        json_path=None,
+        log_path=tmp_path / "log.txt",
+    )
+    options.run_prereqs = True
+    dummy_ctx = DummyContext()
+    runtime = SetupRuntime(
+        options=options,
+        logger=SetupLogger(tmp_path / "log.txt"),
+        context=dummy_ctx,  # type: ignore[arg-type]
+        scan=ScanData(metadata={}, results={}, phase_modes={}, profile=Profile.WORKSTATION),
+        state=SetupState(),
+    )
+    result = _apply_prereq(runtime, installer)
+    assert result.status == StepStatus.DONE
+    assert dummy_ctx.calls
+    cmd, _ = dummy_ctx.calls[0]
+    assert "/quiet" in cmd
+
+
+def test_banner_before_profile_prompt(monkeypatch, capsys) -> None:
+    class DummyIO(io.StringIO):
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(sys, "stdin", DummyIO())
+    inputs = iter(["workstation"])
+
+    def fake_input(prompt=""):
+        print(prompt, end="")
+        return next(inputs)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr("ue_configurator.cli._prompt_bool_cli", lambda *args, **kwargs: False)
+    monkeypatch.setattr("ue_configurator.cli.run_setup", lambda opts: 0)
+
+    cli.main(["setup", "--plan", "--include-horde"])
+    out = capsys.readouterr().out
+    assert "UE Dev Configurator" in out
+    assert "Select profile" in out
+    assert out.index("UE Dev Configurator") < out.index("Select profile")
 
 
 def test_setup_logger_sanitizes_path(tmp_path: Path) -> None:

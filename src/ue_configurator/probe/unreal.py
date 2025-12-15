@@ -5,6 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
+try:  # pragma: no cover - Windows only
+    import winreg  # type: ignore
+except ImportError:  # pragma: no cover
+    winreg = None
+
 from .base import ActionRecommendation, CheckResult, CheckStatus, ProbeContext
 
 
@@ -109,11 +114,24 @@ def check_redist_installer(ctx: ProbeContext) -> CheckResult:
 
     installer = None
     redist_root = ue_path / "Engine" / "Extras" / "Redist"
+    found_type = None
     if redist_root.exists():
         for exe in redist_root.rglob("UEPrereqSetup_x64.exe"):
             installer = exe
+            found_type = "UEPrereqSetup_x64.exe"
             break
+        if installer is None:
+            for exe in redist_root.rglob("vc_redist.x64.exe"):
+                installer = exe
+                found_type = "vc_redist.x64.exe"
+                break
+        if installer is None:
+            for exe in redist_root.rglob("vc_redist.arm64.exe"):
+                installer = exe
+                found_type = "vc_redist.arm64.exe"
+                break
 
+    installed_versions = _detect_installed_redist()
     exists = installer is not None and installer.exists()
     status = CheckStatus.PASS if exists else CheckStatus.WARN
     actions = []
@@ -125,15 +143,76 @@ def check_redist_installer(ctx: ProbeContext) -> CheckResult:
                 commands=[f'"{ue_path / "Setup.bat"}"'],
             )
         )
+    elif exists and not installed_versions:
+        actions.append(
+            ActionRecommendation(
+                id="ue.run-prereqs",
+                description="Run UEPrereqSetup_x64.exe or vc_redist.x64.exe silently via --run-prereqs.",
+                commands=["uecfg setup --run-prereqs --apply"],
+            )
+        )
+    details = ""
+    if installer:
+        details = str(installer)
+        if found_type == "vc_redist.x64.exe":
+            details += " (UEPrereqSetup_x64.exe absent; fallback redistributable found)"
+        elif found_type == "vc_redist.arm64.exe":
+            details += " (arm64 redistributable only)"
+    else:
+        details = f"No prerequisites found under {redist_root}"
+    if installed_versions:
+        details += f" | Installed VC++ redist: {', '.join(installed_versions)}"
+        if exists:
+            status = CheckStatus.PASS
+    elif exists and not installed_versions:
+        status = CheckStatus.WARN
+
     return CheckResult(
         id="ue.redist",
         phase=2,
         status=status,
         summary="UE prerequisites installer located" if exists else "UE prerequisites missing",
-        details=str(installer) if installer else str(redist_root / "UEPrereqSetup_x64.exe"),
+        details=details,
         evidence=[str(installer)] if installer else [str(redist_root)],
         actions=actions,
     )
+
+
+def _detect_installed_redist() -> List[str]:
+    """Detect installed VC++ 2015-2022 redistributables via registry."""
+    versions: List[str] = []
+    if winreg is None:
+        return versions
+
+    hives = [
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"),
+    ]
+
+    target_names = (
+        "Microsoft Visual C++ 2015-2022 Redistributable (x64)",
+        "Microsoft Visual C++ 2015-2022 Redistributable (Arm64)",
+    )
+
+    for hive, key_path in hives:
+        try:
+            with winreg.OpenKey(hive, key_path) as root:
+                for i in range(0, winreg.QueryInfoKey(root)[0]):
+                    try:
+                        subkey_name = winreg.EnumKey(root, i)
+                        with winreg.OpenKey(root, subkey_name) as subkey:
+                            display_name, _ = winreg.QueryValueEx(subkey, "DisplayName")
+                            if display_name not in target_names:
+                                continue
+                            display_version, _ = winreg.QueryValueEx(subkey, "DisplayVersion")
+                            versions.append(str(display_version))
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        continue
+        except FileNotFoundError:
+            continue
+    return versions
 
 
 def check_build_commands(ctx: ProbeContext) -> CheckResult:
