@@ -407,10 +407,38 @@ def _evaluate_visual_studio(manifest: "Manifest", ctx: ProbeContext) -> SectionE
         )
     best_inst, best_version, missing = candidates[0]
     if not best_inst.packages:
+        artifact_notes: List[str] = []
+        artifact_evidence: List[str] = []
+        msvc_root = best_inst.installation_path / "VC" / "Tools" / "MSVC"
+        if msvc_root.is_dir():
+            versions = sorted([child.name for child in msvc_root.iterdir() if child.is_dir()])
+            if versions:
+                artifact_notes.append(f"MSVC toolsets: {', '.join(versions)}")
+                cl_path = msvc_root / versions[0] / "bin" / "Hostx64" / "x64" / "cl.exe"
+                if cl_path.exists():
+                    artifact_evidence.append(str(cl_path))
+
+        sdks = _collect_windows_sdks(ctx)
+        if sdks:
+            sdk_desc = ", ".join([f"{ver} @ {path}" for ver, path in sdks])
+            artifact_notes.append(f"Windows SDKs: {sdk_desc}")
+
+        for tool in ("cmake.exe", "ninja.exe"):
+            tool_paths = _detect_tool(tool, ctx)
+            if tool_paths:
+                artifact_notes.append(f"{tool} via PATH/common: {tool_paths[0]}")
+                artifact_evidence.extend(tool_paths)
+
+        message = "Component list unavailable; compliance UNVERIFIED."
+        if artifact_notes:
+            message += " Found toolchain artifacts: " + "; ".join(artifact_notes)
+        else:
+            message += " No toolchain artifacts detected."
+
         return SectionEvaluation(
             status=CheckStatus.WARN,
-            message="Unable to verify Visual Studio components (vswhere returned no package list).",
-            evidence=[f"{best_inst.display_name} {best_inst.version}"],
+            message=message,
+            evidence=[f"{best_inst.display_name} {best_inst.version} @ {best_inst.installation_path}"] + artifact_evidence,
             actions=[_vs_component_action(vs_req.requires_components)],
         )
     for inst, version, missing_components in candidates[1:]:

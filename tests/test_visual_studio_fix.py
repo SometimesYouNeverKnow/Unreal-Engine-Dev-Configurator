@@ -14,7 +14,7 @@ from ue_configurator.fix import visual_studio
 from ue_configurator.manifest import MANIFEST_DIR, load_manifest_from_path
 from ue_configurator.manifest.manifest_types import WindowsSDKRequirement
 from ue_configurator.probe.base import ProbeContext
-from ue_configurator.probe.toolchain import VSInstance
+from ue_configurator.probe.toolchain import CheckStatus, VSInstance, _evaluate_visual_studio
 
 
 def test_generate_vsconfig_contains_manifest_components(tmp_path: Path) -> None:
@@ -222,3 +222,27 @@ def test_ensure_vs_manifest_components_blocked_without_setup(monkeypatch) -> Non
     monkeypatch.setattr(visual_studio, "find_vs_installer_setup_exe", lambda: None)
     outcome = visual_studio.ensure_vs_manifest_components(ctx, manifest)
     assert outcome.blocked
+
+
+def test_vs_component_unverified_with_artifacts(tmp_path: Path) -> None:
+    manifest = load_manifest_from_path(MANIFEST_DIR / "ue_5.7.json")
+    ctx = ProbeContext()
+    inst_root = tmp_path / "VS"
+    msvc_dir = inst_root / "VC" / "Tools" / "MSVC" / "14.38.33130"
+    bin_dir = msvc_dir / "bin" / "Hostx64" / "x64"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "cl.exe").write_text("", encoding="utf-8")
+    ctx.cache["vs_instances"] = [
+        VSInstance(
+            display_name="VS",
+            installation_path=inst_root,
+            version="17.8.5",
+            product_id="visualstudio",
+            packages=[],
+        )
+    ]
+
+    evaluation = _evaluate_visual_studio(manifest, ctx)
+    assert evaluation.status == CheckStatus.WARN
+    assert "UNVERIFIED" in evaluation.message
+    assert any("MSVC toolsets" in ev or "cl.exe" in ev for ev in evaluation.evidence)
