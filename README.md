@@ -72,6 +72,14 @@ uecfg setup --resume --apply --phase 1 --phase 2 --ue-root D:\UnrealEngine
 
 - Use `run_setup.bat --no-pause ...` or set `UECFG_NO_PAUSE=1` if you do not want the launcher to wait for a key press at the end.
 
+Shared DDC / Distributed Shaders
+--------------------------------
+- The setup wizard now offers a **Configure Shared DDC / Distributed Shaders** intent alongside configure/build/register.
+- You can target user-global (`%APPDATA%\Unreal Engine\UnrealBuildTool\BuildConfiguration.xml` + per-user DerivedDataCache.ini), engine-global (writes under `Engine/` in the provided UE root), or both.
+- The workflow prompts for a shared DDC path (default suggestion is editable), optional local fallback, validates existence/writability (opt-in creation), shows a diff-style preview, and backs up any touched files with timestamps.
+- Distributed shader settings are derived from the UnrealBuildTool XML schema in your UE source tree so unknown keys are never written; every proposed value can be overridden or skipped before apply.
+- Reruns are idempotent—if the requested DDC/share + shader flags are already present, it reports that nothing changed and exits cleanly.
+
 Making a source build runnable (ShaderCompileWorker etc.)
 --------------------------------------------------------
 - Phase 2 now reports **Engine Build Completeness** with PASS/WARN outcomes for the default Win64 Development targets (UnrealEditor, ShaderCompileWorker, UnrealPak, CrashReportClient).

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ue_configurator.probe.base import CheckStatus, ProbeContext
 from ue_configurator.probe import unreal
+from ue_configurator.ue import config_paths
 
 
 def test_parse_build_configuration_flags_reads_booleans() -> None:
@@ -58,3 +59,20 @@ def test_ddc_detection_warns_when_local_only(monkeypatch, tmp_path: Path) -> Non
     result = unreal.check_ddc_configuration(ctx)
     assert result.status == CheckStatus.WARN
     assert "local" in result.summary.lower()
+
+
+def test_ddc_detection_reads_user_config(monkeypatch, tmp_path: Path) -> None:
+    ue_root = tmp_path / "UE"
+    (ue_root / "Engine" / "Config").mkdir(parents=True)
+    user_ddc = tmp_path / "User" / "DerivedDataCache.ini"
+    user_ddc.parent.mkdir(parents=True)
+    user_ddc.write_text("[DerivedDataCache]\nSharedDataCachePath=\\\\nas\\ddc\n", encoding="utf-8")
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setattr(config_paths, "user_ddc_config_path", lambda: user_ddc)
+
+    ctx = ProbeContext(ue_root=str(ue_root))
+    ctx.cache["ue_root_path"] = ue_root
+    result = unreal.check_ddc_configuration(ctx)
+    assert result.status == CheckStatus.PASS
+    assert "\\\\nas\\ddc" in result.details

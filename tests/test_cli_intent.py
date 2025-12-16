@@ -123,6 +123,11 @@ def test_intent_register_option(monkeypatch) -> None:
     assert cli._prompt_intent() == "register"
 
 
+def test_intent_ddc_option(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", _fake_input(["5"]))
+    assert cli._prompt_intent() == "ddc-shaders"
+
+
 def test_register_only_prompts_for_root(monkeypatch, tmp_path: Path) -> None:
     captured = {}
     ue_root = tmp_path / "UE"

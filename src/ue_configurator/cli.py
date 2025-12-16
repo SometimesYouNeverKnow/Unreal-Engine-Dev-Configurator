@@ -29,6 +29,7 @@ from ue_configurator.report.console import render_console
 from ue_configurator.report.json_report import write_json
 from ue_configurator.reporting.toolchain_summary import render_toolchain_summary
 from ue_configurator.reporting.startup_banner import format_startup_banner, format_minimal_banner
+from ue_configurator.ue.configure_ddc_shaders import WorkflowOptions, configure_ddc_and_shaders
 
 
 def _add_global_flags(parser: argparse.ArgumentParser) -> None:
@@ -252,6 +253,7 @@ def _prompt_intent() -> str:
     print("  2) Build engine/tools (slow; runs Build.bat; opt-in)")
     print("  3) Configure + build (configure first, then build)")
     print("  4) Register engine (UnrealVersionSelector; safe to re-run)")
+    print("  5) Configure Shared DDC / Distributed Shaders")
     while True:
         choice = input("Select an option [1]: ").strip()
         if not choice or choice == "1":
@@ -262,7 +264,9 @@ def _prompt_intent() -> str:
             return "both"
         if choice == "4":
             return "register"
-        print("Please enter 1, 2, 3, or 4.")
+        if choice == "5":
+            return "ddc-shaders"
+        print("Please enter 1, 2, 3, 4, or 5.")
 
 
 def _prompt_admin_fallback() -> str:
@@ -284,6 +288,7 @@ def handle_setup(args: argparse.Namespace) -> int:
     build_after_config = False
     build_only = False
     register_only = False
+    ddc_only = False
     build_engine_flag = bool(args.build_engine)
     register_engine_flag = bool(getattr(args, "register_engine", False))
     interactive_prompt_needed = (
@@ -305,6 +310,8 @@ def handle_setup(args: argparse.Namespace) -> int:
         elif intent == "register":
             register_engine_flag = True
             register_only = True
+        elif intent == "ddc-shaders":
+            ddc_only = True
 
     profile = resolve_profile(args.profile)
     skip_profile_prompt = build_only or register_only
@@ -335,6 +342,25 @@ def handle_setup(args: argparse.Namespace) -> int:
 
     apply_flag = args.apply or build_only or register_engine_flag
     plan_only_flag = args.plan
+
+    if ddc_only:
+        options = WorkflowOptions(
+            ue_root=Path(args.ue_root).expanduser() if args.ue_root else None,
+            dry_run=args.dry_run,
+            apply=args.apply,
+            verbose=args.verbose,
+            interactive=interactive,
+        )
+        outcome = configure_ddc_and_shaders(options)
+        print("Configuration summary:")
+        print(f"  - {outcome.ddc_status}")
+        print(f"  - {outcome.shader_status}")
+        applied_text = "applied" if outcome.applied else "not applied"
+        print(f"  - Changes {applied_text}")
+        if outcome.warnings:
+            for warning in outcome.warnings:
+                print(f"  - WARN: {warning}")
+        return 0 if outcome.applied or not outcome.warnings else 1
 
     if (build_only or register_only or register_engine_flag) and ue_root is None and interactive:
         response = input("Enter UE root path (required for build/register): ").strip().strip('"')

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import re
-import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -15,6 +14,8 @@ except ImportError:  # pragma: no cover
 
 from .base import ActionRecommendation, CheckResult, CheckStatus, ProbeContext
 from ue_configurator.probe import horde as horde_probe
+from ue_configurator.ue import config_paths
+from ue_configurator.ue.build_config import parse_build_configuration_flags
 from ue_configurator.ue.build_targets import determine_build_plan, missing_targets, summarize_plan
 from ue_configurator.ue.artifact_resolver import ArtifactResolver
 
@@ -301,26 +302,15 @@ def check_engine_build(ctx: ProbeContext) -> CheckResult:
     )
 
 
-def _parse_bool(text: str) -> bool:
-    return text.strip().lower() in ("true", "1", "yes")
-
-
 def _parse_build_configuration_flags(xml_text: str) -> Dict[str, bool]:
-    """Extract relevant distributed build flags from BuildConfiguration.xml."""
+    """Backward-compatible wrapper that retains the probe contract."""
 
-    flags: Dict[str, bool] = {}
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return flags
-    for elem in root.iter():
-        tag = elem.tag
-        if "}" in tag:
-            tag = tag.split("}", 1)[1]
-        if tag in ("bAllowXGE", "bAllowRemoteBuilds", "bUseHordeAgent", "bAllowXGEShaderCompile"):
-            if elem.text:
-                flags[tag] = _parse_bool(elem.text)
-    return flags
+    all_flags = parse_build_configuration_flags(xml_text)
+    filtered: Dict[str, bool] = {}
+    for key in ("bAllowXGE", "bAllowRemoteBuilds", "bUseHordeAgent", "bAllowXGEShaderCompile"):
+        if key in all_flags:
+            filtered[key] = all_flags[key]
+    return filtered
 
 
 def check_shader_distribution(ctx: ProbeContext) -> CheckResult:
@@ -386,15 +376,19 @@ def check_shader_distribution(ctx: ProbeContext) -> CheckResult:
 def _extract_paths_from_text(text: str) -> List[str]:
     paths: List[str] = []
     for line in text.splitlines():
-        if "DerivedData" not in line:
-            continue
         if "=" not in line:
             continue
-        _, raw_value = line.split("=", 1)
+        key, raw_value = line.split("=", 1)
+        key = key.strip()
+        if not any(token in key for token in ("DerivedData", "Cache")) and not any(
+            token in raw_value for token in ("DerivedData", "Cache")
+        ):
+            continue
         # Pull out Path= tokens inside structured config blobs
+        candidates: List[str] = []
         for token in raw_value.split(","):
             token = token.strip()
-            if "DerivedData" not in token and "Cache" not in token:
+            if "DerivedData" not in token and "Cache" not in token and not token.startswith("Path="):
                 continue
             if token.startswith("Path="):
                 value = token.split("=", 1)[1]
@@ -402,7 +396,10 @@ def _extract_paths_from_text(text: str) -> List[str]:
                 value = token
             value = value.strip().strip('"').strip("'")
             if value:
-                paths.append(value)
+                candidates.append(value)
+        if not candidates and raw_value.strip():
+            candidates.append(raw_value.strip().strip('"').strip("'"))
+        paths.extend(candidates)
     return paths
 
 
@@ -465,6 +462,8 @@ def check_ddc_configuration(ctx: ProbeContext) -> CheckResult:
         ue_path / "Engine" / "Config" / "BaseEngine.ini",
         ue_path / "Engine" / "Saved" / "Config" / "Windows" / "Engine.ini",
         ue_path / "Engine" / "Programs" / "UnrealBuildTool" / "Config" / "UnrealBuildTool.ini",
+        ue_path / "Engine" / "Config" / "DerivedDataCache.ini",
+        config_paths.user_ddc_config_path(),
     ]
 
     discovered_paths: List[str] = []
