@@ -30,6 +30,7 @@ from ue_configurator.report.json_report import write_json
 from ue_configurator.reporting.toolchain_summary import render_toolchain_summary
 from ue_configurator.reporting.startup_banner import format_startup_banner, format_minimal_banner
 from ue_configurator.ue.configure_ddc_shaders import WorkflowOptions, configure_ddc_and_shaders
+from ue_configurator.ue.horde_helper import HordeHelperOptions, run_horde_setup_helper
 
 
 def _add_global_flags(parser: argparse.ArgumentParser) -> None:
@@ -102,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict setup to selected phases.",
     )
     setup_parser.add_argument("--ue-root", help="Path to an Unreal Engine source tree")
+    setup_parser.add_argument("--verify-horde", action="store_true", help="Verify Horde agent connectivity if possible.")
     setup_parser.add_argument("--verify-ddc", action="store_true", help="Verify shared DDC access after writing config.")
     setup_parser.add_argument(
         "--verify-ddc-write-test",
@@ -260,6 +262,7 @@ def _prompt_intent() -> str:
     print("  3) Configure + build (configure first, then build)")
     print("  4) Register engine (UnrealVersionSelector; safe to re-run)")
     print("  5) Configure Shared DDC / Distributed Shaders")
+    print("  6) Horde setup helper (post-compile)")
     while True:
         choice = input("Select an option [1]: ").strip()
         if not choice or choice == "1":
@@ -272,7 +275,9 @@ def _prompt_intent() -> str:
             return "register"
         if choice == "5":
             return "ddc-shaders"
-        print("Please enter 1, 2, 3, 4, or 5.")
+        if choice == "6":
+            return "horde-helper"
+        print("Please enter 1, 2, 3, 4, 5, or 6.")
 
 
 def _prompt_admin_fallback() -> str:
@@ -295,6 +300,7 @@ def handle_setup(args: argparse.Namespace) -> int:
     build_only = False
     register_only = False
     ddc_only = False
+    horde_helper_only = False
     build_engine_flag = bool(args.build_engine)
     register_engine_flag = bool(getattr(args, "register_engine", False))
     interactive_prompt_needed = (
@@ -318,6 +324,8 @@ def handle_setup(args: argparse.Namespace) -> int:
             register_only = True
         elif intent == "ddc-shaders":
             ddc_only = True
+        elif intent == "horde-helper":
+            horde_helper_only = True
 
     profile = resolve_profile(args.profile)
     skip_profile_prompt = build_only or register_only
@@ -363,6 +371,29 @@ def handle_setup(args: argparse.Namespace) -> int:
         print("Configuration summary:")
         print(f"  - {outcome.ddc_status}")
         print(f"  - {outcome.shader_status}")
+        applied_text = "applied" if outcome.applied else "not applied"
+        print(f"  - Changes {applied_text}")
+        if outcome.warnings:
+            for warning in outcome.warnings:
+                print(f"  - WARN: {warning}")
+        return 0 if outcome.applied or not outcome.warnings else 1
+
+    if horde_helper_only:
+        options = HordeHelperOptions(
+            ue_root=Path(args.ue_root).expanduser() if args.ue_root else None,
+            dry_run=args.dry_run,
+            apply=args.apply,
+            verbose=args.verbose,
+            interactive=interactive,
+            verify_horde=args.verify_horde,
+            verify_ddc=args.verify_ddc or args.verify_ddc_write_test,
+            verify_ddc_write_test=args.verify_ddc_write_test,
+        )
+        outcome = run_horde_setup_helper(options)
+        print("Horde helper summary:")
+        print(f"  - {outcome.horde_status}")
+        print(f"  - {outcome.shader_status}")
+        print(f"  - {outcome.ddc_status}")
         applied_text = "applied" if outcome.applied else "not applied"
         print(f"  - Changes {applied_text}")
         if outcome.warnings:
@@ -483,6 +514,9 @@ def handle_setup(args: argparse.Namespace) -> int:
         build_engine=build_engine_flag,
         build_targets=build_targets,
         register_engine=register_engine_flag,
+        verify_horde=getattr(args, "verify_horde", False),
+        verify_ddc=getattr(args, "verify_ddc", False),
+        verify_ddc_write_test=getattr(args, "verify_ddc_write_test", False),
     )
     return run_setup(options)
 

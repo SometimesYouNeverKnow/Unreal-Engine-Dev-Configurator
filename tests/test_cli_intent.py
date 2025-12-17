@@ -128,6 +128,37 @@ def test_intent_ddc_option(monkeypatch) -> None:
     assert cli._prompt_intent() == "ddc-shaders"
 
 
+def test_intent_horde_helper_option(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", _fake_input(["6"]))
+    assert cli._prompt_intent() == "horde-helper"
+
+
+def test_intent_horde_helper_routes(monkeypatch, tmp_path: Path) -> None:
+    captured = {}
+
+    def fake_helper(options):
+        captured["options"] = options
+        return SimpleNamespace(
+            applied=False,
+            horde_status="horde",
+            shader_status="shader",
+            ddc_status="ddc",
+            warnings=[],
+        )
+
+    monkeypatch.setattr(cli, "run_horde_setup_helper", fake_helper)
+    monkeypatch.setattr(cli, "acquire_single_instance_lock", _noop_lock)
+    monkeypatch.setattr(cli, "_prompt_profile_choice", lambda current: current)
+    monkeypatch.setattr(cli, "_prompt_bool_cli", lambda *args, **kwargs: True)
+    monkeypatch.setattr(cli, "_is_admin", lambda: True)
+    monkeypatch.setattr("builtins.input", _fake_input(["6"]))
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
+
+    cli.main(["setup", "--ue-root", str(tmp_path)])
+
+    assert captured["options"].interactive is True
+
+
 def test_register_only_prompts_for_root(monkeypatch, tmp_path: Path) -> None:
     captured = {}
     ue_root = tmp_path / "UE"

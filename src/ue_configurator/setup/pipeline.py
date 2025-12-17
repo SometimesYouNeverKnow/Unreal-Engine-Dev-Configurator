@@ -117,6 +117,9 @@ class SetupOptions:
     build_engine: bool = False
     build_targets: Optional[List[str]] = None
     register_engine: bool = False
+    verify_horde: bool = False
+    verify_ddc: bool = False
+    verify_ddc_write_test: bool = False
 
 
 class SetupLogger:
@@ -704,6 +707,49 @@ def run_setup(options: SetupOptions) -> int:
     theme = ConsoleTheme(no_color=options.no_color)
     render_console(runtime.scan, theme=theme, verbose=options.verbose)
 
+    if options.build_engine and sys.stdin.isatty():
+        build_status = statuses.get("ue.engine-build")
+        if build_status == StepStatus.DONE:
+            if _prompt_yes_no(
+                "Build succeeded. Configure Horde + distributed shaders + shared DDC now?", default=False
+            ):
+                from ue_configurator.ue.horde_helper import HordeHelperOptions, run_horde_setup_helper
+
+                helper_options = HordeHelperOptions(
+                    ue_root=Path(options.ue_root).expanduser() if options.ue_root else None,
+                    dry_run=options.dry_run,
+                    apply=False,
+                    verbose=options.verbose,
+                    interactive=True,
+                    verify_horde=options.verify_horde,
+                    verify_ddc=options.verify_ddc,
+                    verify_ddc_write_test=options.verify_ddc_write_test,
+                    prompt_for_mode=False,
+                )
+                audit_outcome = run_horde_setup_helper(helper_options)
+                if _prompt_yes_no("Apply Horde/shader/DDC changes now?", default=False):
+                    apply_options = HordeHelperOptions(
+                        ue_root=Path(options.ue_root).expanduser() if options.ue_root else None,
+                        dry_run=options.dry_run,
+                        apply=True,
+                        verbose=options.verbose,
+                        interactive=True,
+                        verify_horde=options.verify_horde,
+                        verify_ddc=options.verify_ddc,
+                        verify_ddc_write_test=options.verify_ddc_write_test,
+                        prompt_for_mode=False,
+                    )
+                    audit_outcome = run_horde_setup_helper(apply_options)
+                print("Horde helper summary:")
+                print(f"  - {audit_outcome.horde_status}")
+                print(f"  - {audit_outcome.shader_status}")
+                print(f"  - {audit_outcome.ddc_status}")
+                applied_text = "applied" if audit_outcome.applied else "not applied"
+                print(f"  - Changes {applied_text}")
+                if audit_outcome.warnings:
+                    for warning in audit_outcome.warnings:
+                        print(f"  - WARN: {warning}")
+
     if options.register_engine:
         reg_status = statuses.get("ue.register", StepStatus.PENDING)
         reg_message = step_results.get("ue.register", StepResult(reg_status, "Not executed.")).message
@@ -794,6 +840,12 @@ def _reconstruct_cli_args(options: SetupOptions, *, include_elevation_flag: bool
         args.append("--vs-interactive")
     if options.build_engine:
         args.append("--build-engine")
+    if options.verify_horde:
+        args.append("--verify-horde")
+    if options.verify_ddc:
+        args.append("--verify-ddc")
+    if options.verify_ddc_write_test:
+        args.append("--verify-ddc-write-test")
     if options.build_targets:
         for target in options.build_targets:
             args.extend(["--build-target", target])

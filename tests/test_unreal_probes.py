@@ -76,3 +76,32 @@ def test_ddc_detection_reads_user_config(monkeypatch, tmp_path: Path) -> None:
     result = unreal.check_ddc_configuration(ctx)
     assert result.status == CheckStatus.PASS
     assert "\\\\nas\\ddc" in result.details
+
+
+def test_build_configuration_inspection_no_flags(monkeypatch, tmp_path: Path) -> None:
+    cfg = tmp_path / "BuildConfiguration.xml"
+    cfg.write_text("<Configuration></Configuration>", encoding="utf-8")
+    monkeypatch.setattr(config_paths, "user_build_configuration_path", lambda: cfg)
+    monkeypatch.setattr(config_paths, "engine_build_configuration_path", lambda _root: tmp_path / "EngineConfig.xml")
+
+    inspection = unreal.inspect_build_configuration(None)
+    assert inspection.status == "no-flags"
+
+
+def test_build_configuration_inspection_flags_present(monkeypatch, tmp_path: Path) -> None:
+    cfg = tmp_path / "BuildConfiguration.xml"
+    cfg.write_text(
+        """
+<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">
+  <BuildConfiguration>
+    <bAllowXGE>true</bAllowXGE>
+  </BuildConfiguration>
+</Configuration>
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config_paths, "user_build_configuration_path", lambda: cfg)
+    monkeypatch.setattr(config_paths, "engine_build_configuration_path", lambda _root: tmp_path / "EngineConfig.xml")
+
+    inspection = unreal.inspect_build_configuration(None)
+    assert inspection.status == "enabled"

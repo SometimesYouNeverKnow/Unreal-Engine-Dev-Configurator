@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Optional
 
 try:  # pragma: no cover - Windows only
     import winreg  # type: ignore
@@ -313,6 +314,45 @@ def _parse_build_configuration_flags(xml_text: str) -> Dict[str, bool]:
     return filtered
 
 
+@dataclass
+class BuildConfigurationInspection:
+    path: Optional[Path]
+    flags: Dict[str, bool]
+    status: str
+    details: str
+
+
+def inspect_build_configuration(ue_root: Path | None) -> BuildConfigurationInspection:
+    paths: List[Path] = [config_paths.user_build_configuration_path()]
+    if ue_root:
+        paths.append(config_paths.engine_build_configuration_path(ue_root))
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return BuildConfigurationInspection(path=path, flags={}, status="unreadable", details="Unreadable file.")
+        flags = _parse_build_configuration_flags(text)
+        if not flags:
+            return BuildConfigurationInspection(
+                path=path,
+                flags=flags,
+                status="no-flags",
+                details=f"{path}: no relevant flags",
+            )
+        enabled = any(flags.values())
+        status = "enabled" if enabled else "disabled"
+        detail_flags = ", ".join(f"{k}={v}" for k, v in sorted(flags.items()))
+        return BuildConfigurationInspection(
+            path=path,
+            flags=flags,
+            status=status,
+            details=f"{path}: {detail_flags}",
+        )
+    return BuildConfigurationInspection(path=None, flags={}, status="missing", details="No BuildConfiguration.xml found.")
+
+
 def check_shader_distribution(ctx: ProbeContext) -> CheckResult:
     """Report whether distributed shader compilation is configured."""
 
@@ -328,8 +368,8 @@ def check_shader_distribution(ctx: ProbeContext) -> CheckResult:
             actions=[],
         )
 
-    configs = horde_probe._find_build_configs(ctx)
-    if not configs:
+    inspection = inspect_build_configuration(ue_path)
+    if inspection.status == "missing":
         return CheckResult(
             id="ue.shader-distribution",
             phase=2,
@@ -345,30 +385,33 @@ def check_shader_distribution(ctx: ProbeContext) -> CheckResult:
                 )
             ],
         )
+    if inspection.status == "unreadable":
+        return CheckResult(
+            id="ue.shader-distribution",
+            phase=2,
+            status=CheckStatus.WARN,
+            summary="Distributed shader compile: unreadable config",
+            details=inspection.details,
+            evidence=[inspection.details],
+            actions=[],
+        )
 
-    distributed = False
-    evidence: List[str] = []
-    for cfg in configs:
-        try:
-            text = cfg.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            continue
-        flags = _parse_build_configuration_flags(text)
-        flag_text = ", ".join(f"{k}={v}" for k, v in sorted(flags.items()))
-        evidence.append(f"{cfg}: {flag_text or 'no relevant flags'}")
-        if any(flags.get(key) for key in ("bAllowXGE", "bAllowRemoteBuilds", "bUseHordeAgent", "bAllowXGEShaderCompile")):
-            distributed = True
-
+    distributed = inspection.status == "enabled"
     status = CheckStatus.PASS if distributed else CheckStatus.WARN
-    summary = "Distributed shader compile: enabled" if distributed else "Distributed shader compile: not enabled"
-    details = "; ".join(evidence) or "BuildConfiguration.xml present but unreadable."
+    if inspection.status == "no-flags":
+        summary = "Distributed shader compile: no relevant flags"
+    elif inspection.status == "disabled":
+        summary = "Distributed shader compile: present but disabled"
+    else:
+        summary = "Distributed shader compile: enabled"
+    details = inspection.details
     return CheckResult(
         id="ue.shader-distribution",
         phase=2,
         status=status,
         summary=summary,
         details=details,
-        evidence=evidence,
+        evidence=[details],
         actions=[],
     )
 

@@ -81,6 +81,14 @@ Shared DDC / Distributed Shaders
 - Optional verification is available via `--verify-ddc` (read-only) or `--verify-ddc-write-test` (create/delete a tiny file). Skipping verification prints a reminder that Unreal will try the shared cache at next launch.
 - Reruns are idempotent—if the requested DDC/share + shader flags are already present, it reports that nothing changed and exits cleanly.
 
+Horde setup helper (post-compile)
+---------------------------------
+- The setup wizard includes a **Horde setup helper (post-compile)** intent that audits Horde agent status, distributed shader settings, and shared DDC after the engine/toolchain is working.
+- Default mode is audit-only and read-only; apply mode previews diffs, backs up any files it touches, and only writes after confirmation.
+- Endpoint/pool/DDC path prompts only prefill detected values; leaving a prompt blank skips that write.
+- Optional verification flags: `--verify-horde`, `--verify-ddc`, and `--verify-ddc-write-test`.
+- After a successful engine build in the setup wizard, it can offer to run the helper (audit first, then apply).
+
 Making a source build runnable (ShaderCompileWorker etc.)
 --------------------------------------------------------
 - Phase 2 now reports **Engine Build Completeness** with PASS/WARN outcomes for the default Win64 Development targets (UnrealEditor, ShaderCompileWorker, UnrealPak, CrashReportClient).

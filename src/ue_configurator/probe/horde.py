@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import socket
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from .base import ActionRecommendation, CheckResult, CheckStatus, ProbeContext
+from ue_configurator.ue.horde_agent_config import discover_horde_agent_configs, load_horde_agent_config, HordeAgentConfig
+
+
+@dataclass
+class HordeAgentStatus:
+    installed: bool
+    running: bool
+    service_state: str
+    details: str
 
 
 def check_network_readiness(ctx: ProbeContext) -> CheckResult:
@@ -37,10 +47,28 @@ def check_network_readiness(ctx: ProbeContext) -> CheckResult:
     )
 
 
-def check_horde_agent(ctx: ProbeContext) -> CheckResult:
+def probe_horde_agent_status(ctx: ProbeContext) -> HordeAgentStatus:
     result = ctx.run_command(["sc", "query", "HordeAgent"], timeout=5)
-    installed = "STATE" in result.stdout
-    running = "RUNNING" in result.stdout.upper()
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part).strip()
+    output_upper = output.upper()
+    installed = "SERVICE_NAME" in output_upper or "STATE" in output_upper
+    running = "RUNNING" in output_upper
+    if "1060" in output_upper or "DOES NOT EXIST" in output_upper:
+        installed = False
+        running = False
+    state = "unknown"
+    for line in output.splitlines():
+        if "STATE" in line.upper():
+            state = line.split(":", 1)[-1].strip()
+            break
+    details = output or "Service query failed."
+    return HordeAgentStatus(installed=installed, running=running, service_state=state, details=details)
+
+
+def check_horde_agent(ctx: ProbeContext) -> CheckResult:
+    status_info = probe_horde_agent_status(ctx)
+    installed = status_info.installed
+    running = status_info.running
     status = CheckStatus.PASS if running else CheckStatus.WARN
     actions = []
     if not installed:
@@ -59,8 +87,11 @@ def check_horde_agent(ctx: ProbeContext) -> CheckResult:
                 commands=["sc start HordeAgent"],
             )
         )
-    summary = "Horde agent running" if running else "Horde agent service not running"
-    if not installed:
+    if running:
+        summary = "Horde agent running"
+    elif installed:
+        summary = "Horde agent installed but not running"
+    else:
         summary = "Horde agent not found"
 
     return CheckResult(
@@ -68,8 +99,8 @@ def check_horde_agent(ctx: ProbeContext) -> CheckResult:
         phase=3,
         status=status,
         summary=summary,
-        details=result.stdout.strip() or result.stderr.strip() or "Service query failed.",
-        evidence=[result.stdout[:200]],
+        details=status_info.details,
+        evidence=[status_info.details[:200]],
         actions=actions,
     )
 
@@ -89,6 +120,17 @@ def _find_build_configs(ctx: ProbeContext) -> List[Path]:
         for path in root.rglob("BuildConfiguration.xml"):
             results.append(path)
     return results
+
+
+def discover_agent_config() -> Optional[HordeAgentConfig]:
+    configs = discover_horde_agent_configs()
+    parsed: List[HordeAgentConfig] = []
+    for path in configs:
+        config = load_horde_agent_config(path)
+        parsed.append(config)
+        if config.parsed and (config.endpoint or config.pool):
+            return config
+    return parsed[0] if parsed else None
 
 
 def check_build_configuration(ctx: ProbeContext) -> CheckResult:
