@@ -22,12 +22,14 @@ from ue_configurator.ue.config_paths import (
 )
 from ue_configurator.ue.ddc_config import (
     DDCUpdate,
+    DDCValidationResult,
     scan_ddc_schema,
     validate_ddc_path,
     apply_ddc_update,
     plan_ddc_update,
     summarize_ddc_status,
 )
+from ue_configurator.ue.ddc_verify import is_unc_path, verify_shared_ddc_path
 from ue_configurator.ue.ubt_config_schema import discover_xml_config_keys
 
 
@@ -46,6 +48,8 @@ class WorkflowOptions:
     output: PrintFunc = print
     default_shared: Optional[str] = None
     default_local: Optional[Path] = None
+    verify_ddc: bool = False
+    verify_ddc_write_test: bool = False
 
 
 @dataclass
@@ -73,8 +77,8 @@ def _prompt_scope(options: WorkflowOptions) -> str:
         options.output("Please choose 1, 2, or 3.")
 
 
-def _prompt_path(prompt: str, default: Optional[str], options: WorkflowOptions) -> str:
-    suffix = f" [{default}]" if default else ""
+def _prompt_path(prompt: str, default: Optional[str], options: WorkflowOptions, placeholder: Optional[str] = None) -> str:
+    suffix = f" [{default}]" if default else (f" [{placeholder}]" if placeholder else "")
     while True:
         resp = options.input(f"{prompt}{suffix}: ").strip().strip('"')
         if not resp and default:
@@ -199,8 +203,7 @@ def _print_preview(updates: List[BuildConfigUpdate], ddc_updates: List[DDCUpdate
 
 
 def configure_ddc_and_shaders(options: WorkflowOptions) -> ConfigurationOutcome:
-    default_shared = options.default_shared or default_shared_ddc_suggestion()
-    default_local = options.default_local or default_local_ddc_path()
+    warnings: List[str] = []
     scope = _prompt_scope(options) if options.interactive else "user"
 
     ue_root = options.ue_root
@@ -215,16 +218,33 @@ def configure_ddc_and_shaders(options: WorkflowOptions) -> ConfigurationOutcome:
             warnings=["Engine-global scope requested but UE root missing."],
         )
 
-    shared_path_text = _prompt_path("Shared DDC path", default_shared, options) if options.interactive else (
-        default_shared or ""
+    default_shared = options.default_shared or default_shared_ddc_suggestion(ue_root)
+    default_shared = default_shared or None
+    default_local = options.default_local or default_local_ddc_path()
+    shared_placeholder = None if default_shared else "[enter a UNC path or local folder]"
+
+    shared_path_text = (
+        _prompt_path("Shared DDC path", default_shared, options, placeholder=shared_placeholder)
+        if options.interactive
+        else (default_shared or "")
     )
     local_path_text = _prompt_local_fallback(default_local, options) if options.interactive else str(default_local)
 
-    allow_create = True if (shared_path_text and Path(shared_path_text).exists()) else _prompt_allow_create(
-        Path(shared_path_text), options
+    shared_is_unc = is_unc_path(shared_path_text)
+    allow_create = False
+    if shared_path_text and not shared_is_unc:
+        allow_create = True if Path(shared_path_text).exists() else _prompt_allow_create(Path(shared_path_text), options)
+    validation = (
+        validate_ddc_path(Path(shared_path_text), allow_create=allow_create, dry_run=options.dry_run)
+        if not shared_is_unc
+        else DDCValidationResult(
+            path=Path(shared_path_text),
+            ok=True,
+            created=False,
+            latency_ms=None,
+            message="UNC path not verified (skipped pre-check)",
+        )
     )
-    validation = validate_ddc_path(Path(shared_path_text), allow_create=allow_create, dry_run=options.dry_run)
-    warnings: List[str] = []
     if validation.message and not validation.ok:
         warnings.append(validation.message)
     if not validation.ok:
@@ -281,10 +301,32 @@ def configure_ddc_and_shaders(options: WorkflowOptions) -> ConfigurationOutcome:
                 options.output(f"  {line}")
 
     _print_preview(build_updates, ddc_updates, options)
+
+    verification_requested = options.verify_ddc or options.verify_ddc_write_test
+    verify_write_test = options.verify_ddc_write_test
+    verify_now = verification_requested
+    if options.interactive and not verify_now:
+        verify_now = options.input("\nVerify shared DDC access now? [y/N] ").strip().lower() in ("y", "yes")
+    if verify_now and options.interactive and not verify_write_test:
+        verify_write_test = options.input("Attempt a write-test file? [y/N] ").strip().lower() in ("y", "yes")
+
     if options.interactive:
         proceed = options.input("\nApply these changes? [y/N] ").strip().lower() in ("y", "yes")
     else:
         proceed = options.apply
+
+    verification_detail: Optional[str] = None
+    verification_hints: List[str] = []
+    verification_ok: Optional[bool] = None
+    if verify_now:
+        verification_ok, verification_detail, verification_hints = verify_shared_ddc_path(
+            shared_path_text, write_test=verify_write_test
+        )
+        if verification_detail:
+            warnings.append(f"DDC verification: {verification_detail}")
+        for cmd in verification_hints:
+            warnings.append(f"Hint: {cmd}")
+
     if not proceed or options.dry_run:
         return ConfigurationOutcome(
             applied=False,
@@ -301,6 +343,14 @@ def configure_ddc_and_shaders(options: WorkflowOptions) -> ConfigurationOutcome:
     for update in ddc_updates:
         apply_ddc_update(update, dry_run=options.dry_run)
 
+    if shared_is_unc and not verify_now:
+        note = (
+            "Wrote config. UNC path not verified; Unreal will attempt to use it on next run. "
+            "Use 'Verify shared DDC' or rerun with --verify-ddc to test."
+        )
+        options.output(note)
+        warnings.append(note)
+
     shader_status = f"Shaders: configured ({_describe_flags(desired_flags)})" if desired_flags else "Shaders: configured"
     if not desired_flags:
         shader_status = "Shaders: skipped (no supported keys found)"
@@ -310,6 +360,9 @@ def configure_ddc_and_shaders(options: WorkflowOptions) -> ConfigurationOutcome:
         ddc_status = summarize_ddc_status(shared_path_text, local_path_text, validation)
     else:
         ddc_status = "DDC: skipped (unknown keys)"
+    if verify_now and verification_detail:
+        status_suffix = "verified" if verification_ok else "verification failed"
+        ddc_status = f"{ddc_status} | {status_suffix}: {verification_detail}"
     return ConfigurationOutcome(
         applied=True,
         ddc_status=ddc_status,

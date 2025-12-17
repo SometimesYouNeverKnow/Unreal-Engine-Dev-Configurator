@@ -76,8 +76,9 @@ Shared DDC / Distributed Shaders
 --------------------------------
 - The setup wizard now offers a **Configure Shared DDC / Distributed Shaders** intent alongside configure/build/register.
 - You can target user-global (`%APPDATA%\Unreal Engine\UnrealBuildTool\BuildConfiguration.xml` + per-user DerivedDataCache.ini), engine-global (writes under `Engine/` in the provided UE root), or both.
-- The workflow prompts for a shared DDC path (default suggestion is editable), optional local fallback, validates existence/writability (opt-in creation), shows a diff-style preview, and backs up any touched files with timestamps.
+- The workflow prompts for a shared DDC path (prefers existing config values; otherwise shows a placeholder), optional local fallback, shows a diff-style preview, and backs up any touched files with timestamps. UNC paths are written without probing the network unless you request verification.
 - Distributed shader settings are derived from the UnrealBuildTool XML schema in your UE source tree so unknown keys are never written; every proposed value can be overridden or skipped before apply.
+- Optional verification is available via `--verify-ddc` (read-only) or `--verify-ddc-write-test` (create/delete a tiny file). Skipping verification prints a reminder that Unreal will try the shared cache at next launch.
 - Reruns are idempotent—if the requested DDC/share + shader flags are already present, it reports that nothing changed and exits cleanly.
 
 Making a source build runnable (ShaderCompileWorker etc.)

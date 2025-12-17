@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from typing import Optional
 
 
 def _appdata_roaming() -> Path:
@@ -44,7 +45,41 @@ def default_local_ddc_path() -> Path:
     return _local_appdata() / "UnrealEngine" / "Common" / "DerivedDataCache"
 
 
-def default_shared_ddc_suggestion() -> str:
-    """Provide a friendly default UNC suggestion without hardcoding it."""
+def _extract_ddc_value(path: Path) -> Optional[str]:
+    if not path.exists():
+        return None
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key.strip() in ("SharedDataCachePath", "SharedCachePath"):
+            value = value.strip()
+            if value:
+                return value
+    return None
 
-    return r"\\LULU\DDC"
+
+def discover_existing_shared_ddc_path(ue_root: Path | None = None) -> Optional[str]:
+    """Return an already-configured shared DDC path if present."""
+
+    candidates = [user_ddc_config_path()]
+    if ue_root:
+        candidates.append(engine_ddc_config_path(ue_root))
+        candidates.append(Path(ue_root) / "Engine" / "Config" / "BaseEngine.ini")
+        candidates.append(Path(ue_root) / "Engine" / "Config" / "DefaultEngine.ini")
+
+    for candidate in candidates:
+        value = _extract_ddc_value(candidate)
+        if value:
+            return value
+    return None
+
+
+def default_shared_ddc_suggestion(ue_root: Path | None = None) -> str:
+    """Prefer an existing config value; otherwise leave blank."""
+
+    return discover_existing_shared_ddc_path(ue_root) or ""

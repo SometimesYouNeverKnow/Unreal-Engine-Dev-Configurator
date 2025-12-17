@@ -102,6 +102,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Restrict setup to selected phases.",
     )
     setup_parser.add_argument("--ue-root", help="Path to an Unreal Engine source tree")
+    setup_parser.add_argument("--verify-ddc", action="store_true", help="Verify shared DDC access after writing config.")
+    setup_parser.add_argument(
+        "--verify-ddc-write-test",
+        action="store_true",
+        help="Attempt a write-test during shared DDC verification (implies --verify-ddc).",
+    )
     setup_parser.add_argument("--include-horde", action="store_true", help="Include optional Horde/UBA steps")
     setup_parser.add_argument("--apply", action="store_true", help="Apply steps without confirmation prompts")
     setup_parser.add_argument("--plan", action="store_true", help="Print the setup plan then exit")
@@ -350,6 +356,8 @@ def handle_setup(args: argparse.Namespace) -> int:
             apply=args.apply,
             verbose=args.verbose,
             interactive=interactive,
+            verify_ddc=args.verify_ddc or args.verify_ddc_write_test,
+            verify_ddc_write_test=args.verify_ddc_write_test,
         )
         outcome = configure_ddc_and_shaders(options)
         print("Configuration summary:")
