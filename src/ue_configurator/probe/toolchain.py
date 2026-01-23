@@ -289,15 +289,16 @@ def _detect_tool(tool: str, ctx: ProbeContext) -> List[str]:
         paths.extend([line.strip() for line in result.stdout.splitlines() if line.strip()])
 
     # Secondary: common install roots (winget/choco), in case PATH is stale
-    winget_roots = [
-        "C:\\Program Files\\CMake\\bin",
-        "C:\\Program Files (x86)\\CMake\\bin",
-        "C:\\ProgramData\\chocolatey\\bin",
-    ]
-    for root in winget_roots:
-        candidate = Path(root) / tool
-        if candidate.exists():
-            paths.append(str(candidate))
+    if not ctx.dry_run:
+        winget_roots = [
+            "C:\\Program Files\\CMake\\bin",
+            "C:\\Program Files (x86)\\CMake\\bin",
+            "C:\\ProgramData\\chocolatey\\bin",
+        ]
+        for root in winget_roots:
+            candidate = Path(root) / tool
+            if candidate.exists():
+                paths.append(str(candidate))
 
     # Deduplicate preserving order
     seen: set[str] = set()
