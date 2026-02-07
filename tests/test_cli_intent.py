@@ -133,6 +133,11 @@ def test_intent_horde_helper_option(monkeypatch) -> None:
     assert cli._prompt_intent() == "horde-helper"
 
 
+def test_intent_installed_build_option(monkeypatch) -> None:
+    monkeypatch.setattr("builtins.input", _fake_input(["7"]))
+    assert cli._prompt_intent() == "installed-build-sync"
+
+
 def test_intent_horde_helper_routes(monkeypatch, tmp_path: Path) -> None:
     captured = {}
 
@@ -157,6 +162,45 @@ def test_intent_horde_helper_routes(monkeypatch, tmp_path: Path) -> None:
     cli.main(["setup", "--ue-root", str(tmp_path)])
 
     assert captured["options"].interactive is True
+
+
+def test_intent_installed_build_publish_routes(monkeypatch, tmp_path: Path) -> None:
+    source_path = tmp_path / "InstalledSource"
+    source_path.mkdir()
+    captured = {}
+
+    def fake_publish_installed_build(**kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            success=True,
+            summary="Publish completed",
+            details=[],
+            warnings=[],
+            changed_paths=[],
+        )
+
+    monkeypatch.setattr(cli, "publish_installed_build", fake_publish_installed_build)
+    monkeypatch.setattr(cli, "acquire_single_instance_lock", _noop_lock)
+    monkeypatch.setattr("builtins.input", _fake_input([
+        "7",
+        "1",
+        str(tmp_path / "PublishRoot"),
+        "UE_5.7.2",
+        "",
+        str(source_path),
+        "",
+        "",
+        "",
+    ]))
+    monkeypatch.setattr("sys.stdin", SimpleNamespace(isatty=lambda: True))
+
+    cli.main(["setup", "--dry-run"])
+
+    assert captured["source_installed_build_path"] == source_path
+    assert captured["publish_root_path"] == (tmp_path / "PublishRoot")
+    assert captured["build_id"] == "UE_5.7.2"
+    assert captured["thread_count"] == 32
+    assert captured["dry_run"] is True
 
 
 def test_register_only_prompts_for_root(monkeypatch, tmp_path: Path) -> None:

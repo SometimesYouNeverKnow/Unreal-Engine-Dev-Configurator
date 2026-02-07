@@ -363,6 +363,7 @@ def _prompt_intent() -> str:
     print("  4) Register engine (UnrealVersionSelector; safe to re-run)")
     print("  5) Configure Shared DDC / Distributed Shaders")
     print("  6) Horde setup helper (post-compile)")
+    print("  7) Installed Build publish/pull sync")
     while True:
         choice = input("Select an option [1]: ").strip()
         if not choice or choice == "1":
@@ -377,7 +378,94 @@ def _prompt_intent() -> str:
             return "ddc-shaders"
         if choice == "6":
             return "horde-helper"
-        print("Please enter 1, 2, 3, 4, 5, or 6.")
+        if choice == "7":
+            return "installed-build-sync"
+        print("Please enter 1, 2, 3, 4, 5, 6, or 7.")
+
+
+def _prompt_installed_action() -> str:
+    print("Installed Build sync action:")
+    print("  1) Publish current Installed Build to shared root")
+    print("  2) Pull Installed Build from shared root")
+    while True:
+        choice = input("Select action [1]: ").strip()
+        if not choice or choice == "1":
+            return "publish"
+        if choice == "2":
+            return "pull"
+        print("Please enter 1 or 2.")
+
+
+def _prompt_required_value(prompt: str) -> str:
+    while True:
+        value = input(prompt).strip().strip('"')
+        if value:
+            return value
+        print("A value is required.")
+
+
+def _prompt_thread_count(default: int = 32) -> int:
+    while True:
+        raw = input(f"Robocopy thread count [{default}]: ").strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            print("Please enter a positive integer.")
+            continue
+        if value > 0:
+            return value
+        print("Please enter a positive integer.")
+
+
+def _handle_setup_installed_build_sync(args: argparse.Namespace, *, interactive: bool) -> int:
+    if not interactive:
+        print("[setup] Installed Build sync requires interactive prompts in setup mode.")
+        print("        Use `uecfg installed-build ...` for non-interactive automation.")
+        return 2
+
+    action = _prompt_installed_action()
+    publish_root = _prompt_required_value("Shared publish root path: ")
+    build_id = _prompt_required_value("Build ID (example UE_5.7.2): ")
+    thread_count = _prompt_thread_count(default=32)
+    dry_run = bool(args.dry_run)
+
+    if action == "publish":
+        source_path = Path(_prompt_required_value("Source Installed Build path: ")).expanduser()
+        if not source_path.exists():
+            print(f"[setup] Source path does not exist: {source_path}")
+            return 1
+        unreal_source_raw = input("Unreal source path for commit metadata (optional): ").strip().strip('"')
+        shared_ddc = input("Shared DDC path to include in payload (optional): ").strip()
+        association_guid = input("EngineAssociation GUID to include (optional): ").strip()
+        result = publish_installed_build(
+            source_installed_build_path=source_path,
+            publish_root_path=Path(publish_root).expanduser(),
+            build_id=build_id,
+            unreal_source_path=Path(unreal_source_raw).expanduser() if unreal_source_raw else None,
+            shared_ddc_path=shared_ddc or None,
+            engine_association_guid=association_guid or None,
+            thread_count=thread_count,
+            dry_run=dry_run,
+        )
+        return _emit_installed_result(result, getattr(args, "json", None))
+
+    destination = Path(_prompt_required_value("Destination Installed Build path: ")).expanduser()
+    install_settings = _prompt_bool_cli("Apply pulled settings (DDC + shader flags)?", True)
+    apply_engine_association = False
+    if install_settings:
+        apply_engine_association = _prompt_bool_cli("Apply EngineAssociation mapping from payload?", False)
+    result = pull_installed_build(
+        publish_root_path=Path(publish_root).expanduser(),
+        build_id=build_id,
+        destination_installed_build_path=destination,
+        thread_count=thread_count,
+        dry_run=dry_run,
+        install_settings=install_settings,
+        apply_engine_association=apply_engine_association,
+    )
+    return _emit_installed_result(result, getattr(args, "json", None))
 
 
 def _prompt_admin_fallback() -> str:
@@ -401,6 +489,7 @@ def handle_setup(args: argparse.Namespace) -> int:
     register_only = False
     ddc_only = False
     horde_helper_only = False
+    installed_build_sync_only = False
     build_engine_flag = bool(args.build_engine)
     register_engine_flag = bool(getattr(args, "register_engine", False))
     interactive_prompt_needed = (
@@ -426,6 +515,11 @@ def handle_setup(args: argparse.Namespace) -> int:
             ddc_only = True
         elif intent == "horde-helper":
             horde_helper_only = True
+        elif intent == "installed-build-sync":
+            installed_build_sync_only = True
+
+    if installed_build_sync_only:
+        return _handle_setup_installed_build_sync(args, interactive=interactive)
 
     profile = resolve_profile(args.profile)
     skip_profile_prompt = build_only or register_only
