@@ -40,6 +40,7 @@ def _add_global_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--json", metavar="PATH", help="write machine-readable JSON output")
     parser.add_argument("--verbose", action="store_true", help="show verbose probe details")
     parser.add_argument("--no-color", action="store_true", help="disable ANSI colors")
+    parser.add_argument("--log", help=argparse.SUPPRESS)
     parser.add_argument("--ue-version", help="Target Unreal Engine version for manifest compliance (e.g., 5.7)")
     parser.add_argument(
         "--manifest",
@@ -116,7 +117,6 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--apply", action="store_true", help="Apply steps without confirmation prompts")
     setup_parser.add_argument("--plan", action="store_true", help="Print the setup plan then exit")
     setup_parser.add_argument("--resume", action="store_true", help="Resume from previous setup state")
-    setup_parser.add_argument("--log", help=argparse.SUPPRESS)
     setup_parser.add_argument("--use-winget", dest="use_winget", action="store_true", help=argparse.SUPPRESS)
     setup_parser.add_argument("--no-winget", dest="use_winget", action="store_false", help=argparse.SUPPRESS)
     setup_parser.add_argument("--no-splash", action="store_true", help="Skip the punk skull splash screen.")
