@@ -239,6 +239,61 @@ def check_windows_sdks(ctx: ProbeContext) -> CheckResult:
     )
 
 
+def _pdbcopy_candidates() -> List[Path]:
+    candidates: List[Path] = []
+    for base in (os.environ.get("ProgramFiles(x86)"), os.environ.get("ProgramFiles")):
+        if base:
+            candidates.append(Path(base) / "Windows Kits" / "10" / "Debuggers" / "x64" / "pdbcopy.exe")
+    candidates.append(Path(r"C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\pdbcopy.exe"))
+    candidates.append(Path(r"C:\Program Files\Windows Kits\10\Debuggers\x64\pdbcopy.exe"))
+    return candidates
+
+
+def check_pdbcopy(ctx: ProbeContext) -> CheckResult:
+    hits = _detect_tool("pdbcopy.exe", ctx)
+    for candidate in _pdbcopy_candidates():
+        if candidate.exists():
+            hits.append(str(candidate))
+
+    unique_hits: List[str] = []
+    seen: set[str] = set()
+    for hit in hits:
+        if hit in seen:
+            continue
+        seen.add(hit)
+        unique_hits.append(hit)
+
+    if unique_hits:
+        return CheckResult(
+            id="toolchain.pdbcopy",
+            phase=1,
+            status=CheckStatus.PASS,
+            summary="pdbcopy.exe detected",
+            details=f"Using {unique_hits[0]}",
+            evidence=unique_hits,
+            actions=[],
+        )
+
+    return CheckResult(
+        id="toolchain.pdbcopy",
+        phase=1,
+        status=CheckStatus.FAIL,
+        summary="pdbcopy.exe missing",
+        details=(
+            "Install Debugging Tools for Windows via Windows SDK/Visual Studio Installer so "
+            "BuildGraph Installed Build can strip symbols."
+        ),
+        evidence=["missing"],
+        actions=[
+            ActionRecommendation(
+                id="sdk.debugging-tools",
+                description="Install Debugging Tools for Windows and re-run phase 1 scan.",
+                commands=["uecfg scan --phase 1 --ue-version 5.7 --no-color"],
+            )
+        ],
+    )
+
+
 def check_dotnet(ctx: ProbeContext) -> CheckResult:
     sdk_result = ctx.run_command(["dotnet", "--list-sdks"], timeout=10)
     runtime_result = ctx.run_command(["dotnet", "--list-runtimes"], timeout=10)
@@ -734,6 +789,7 @@ PHASE1_PROBES = [
     check_visual_studio,
     check_msvc_toolchain,
     check_windows_sdks,
+    check_pdbcopy,
     check_dotnet,
     check_cmake_ninja,
     check_manifest_compliance,

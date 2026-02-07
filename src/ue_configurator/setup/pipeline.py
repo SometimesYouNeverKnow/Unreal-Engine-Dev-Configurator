@@ -264,6 +264,7 @@ def build_steps(runtime: SetupRuntime) -> List[SetupStep]:
             _get_check(runtime.scan, "toolchain.vs"),
             _get_check(runtime.scan, "toolchain.msvc"),
             _get_check(runtime.scan, "toolchain.sdk"),
+            _get_check(runtime.scan, "toolchain.pdbcopy"),
         ]
         if options.manifest is None and any(check and check.status != CheckStatus.PASS for check in vs_checks):
             steps.append(
@@ -326,6 +327,7 @@ def _vs_ready(runtime: SetupRuntime) -> bool:
         toolchain_probe.check_visual_studio(runtime.context),
         toolchain_probe.check_msvc_toolchain(runtime.context),
         toolchain_probe.check_windows_sdks(runtime.context),
+        toolchain_probe.check_pdbcopy(runtime.context),
     ]
     return all(check.status == CheckStatus.PASS for check in checks)
 

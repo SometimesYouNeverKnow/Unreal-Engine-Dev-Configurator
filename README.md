@@ -8,10 +8,12 @@ Key capabilities
 ----------------
 - Detects operating system, hardware, and baseline tooling needed for Epic's source build flow (Phase 0).
 - Verifies Visual Studio, Windows SDK, .NET, CMake/Ninja, and other compilation toolchains using discovery commands such as `vswhere`, `where.exe`, and registry queries (Phase 1).
+- Verifies `pdbcopy.exe` availability (Windows Debugging Tools) in Phase 1 so BuildGraph Installed Builds fail fast when symbol-stripping prerequisites are missing.
 - Audits Unreal Engine source trees (when provided) and reports the exact scripts/commands necessary to complete `Setup.bat`, `GenerateProjectFiles.bat`, and editor builds (Phase 2).
 - Provides an optional Horde / Unreal Build Accelerator readiness module that inventories BuildConfiguration.xml files and can generate a safe template when explicitly requested (Phase 3).
 - Produces both human-friendly console output with phase progress bars and machine-readable JSON for CI or support ticket attachments.
 - Guards every mutation behind `--dry-run` (default) / `--apply` switches and never assumes installation paths.
+- Publishes/pulls Unreal Installed Build artifacts with restartable copy + manifest/hash verification for repeatable multi-machine rollouts.
 
 Installation
 ------------
@@ -131,12 +133,14 @@ uecfg scan [--phase 0 --phase 1 --phase 2 --phase 3] [--ue-root <path>] [--ue-ve
 uecfg fix  --phase <n> [--apply] [--dry-run]
 uecfg verify --ue-root <path> [--ue-version <x.y>] [--json <path>] [--dry-run]
 uecfg setup [--phase ...] [--plan] [--apply] [--resume] [--ue-root <path>] [--ue-version <x.y>] [--manifest <file>] [--include-horde] [--build-engine] [--build-target <Name>]
+uecfg installed-build {publish|pull} --publish-root-path <path> --build-id <id> [action-specific args]
 ```
 
 - `scan` runs audit probes. By default phases 0-2 execute; include `--phase 3` to opt into the Horde/UBA checks. Add `--ue-version 5.7` (or `--manifest manifests\ue_5.7.json`) to require manifest compliance.
 - `fix` surfaces recommended actions for the requested phase and, when `--apply` is present, performs guarded helpers such as generating Horde templates or modifying Visual Studio to match a manifest. Without `--apply`, commands are only printed. Use `--vs-interactive` if you want the Visual Studio Installer UI instead of the passive mode.
 - `verify` focuses on a provided Unreal Engine source root and ensures `Setup.bat`, `GenerateProjectFiles.bat`, and redist installers are ready to run.
 - `setup` orchestrates scans, installs, confirmations, elevation, and resume-friendly state tracking. Use `--plan` to see the plan, `--apply` to skip prompts, and `--resume` to continue after manual steps. When `--ue-version` is present (or detected), every step references the manifest so reruns stay deterministic. Control Visual Studio Installer mode with `--vs-interactive` / `--vs-passive`. Engine builds stay opt-in; add `--build-engine` (and optional `--build-target`) to build missing editor/helper binaries via Build.bat.
+- `installed-build` publishes or pulls versioned Installed Build artifacts with `robocopy /Z` semantics, `BUILD_INFO.json` hash verification, and optional local settings install (shared DDC, distributed shader flags, EngineAssociation mapping).
 
 Every command accepts `--dry-run` (default) to prevent writes, `--json <path>` to emit machine logs, `--verbose` for detailed evidence, and `--no-color` to disable ANSI styling.
 
@@ -182,3 +186,9 @@ pytest
 ```
 
 The test suite covers the most complex probe logic (e.g., readiness scoring and action planning) with deterministic inputs so it can run on machines without the full Unreal dependency stack.
+
+Codex skill
+-----------
+- Repo-local skill: `skills/ue-dev-configurator-installed-build/SKILL.md`
+- Purpose: run deterministic installed-build workflows by relying on `uecfg` checks first, then pinned source/build commands with Horde-first execution and local fallback.
+- Guardrail: if required prerequisite coverage is missing in `uecfg`, treat that as a tool gap and fix probes first instead of adding one-off checks in the skill.

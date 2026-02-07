@@ -42,6 +42,10 @@ def render_toolchain_summary(scan: ScanData, manifest) -> str:
         if sdk.status == CheckStatus.WARN:
             notes.append(sdk.message)
 
+    pdbcopy = _get(scan, "toolchain.pdbcopy")
+    if pdbcopy:
+        lines.append(_line("pdbcopy", pdbcopy.details))
+
     cmake = _get(scan, "toolchain.cmake")
     if cmake:
         lines.append(_line("CMake/Ninja", cmake.details))

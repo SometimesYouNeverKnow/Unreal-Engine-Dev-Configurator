@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 from datetime import datetime
+import json
 import os
 from pathlib import Path
 import shlex
@@ -31,6 +32,7 @@ from ue_configurator.reporting.toolchain_summary import render_toolchain_summary
 from ue_configurator.reporting.startup_banner import format_startup_banner, format_minimal_banner
 from ue_configurator.ue.configure_ddc_shaders import WorkflowOptions, configure_ddc_and_shaders
 from ue_configurator.ue.horde_helper import HordeHelperOptions, run_horde_setup_helper
+from ue_configurator.ue.installed_build_sync import publish_installed_build, pull_installed_build
 
 
 def _add_global_flags(parser: argparse.ArgumentParser) -> None:
@@ -154,6 +156,39 @@ def build_parser() -> argparse.ArgumentParser:
     setup_parser.add_argument("--_elevated", action="store_true", help=argparse.SUPPRESS)
     setup_parser.set_defaults(use_winget=None)
 
+    installed_parser = subparsers.add_parser(
+        "installed-build",
+        help="Publish or pull versioned Installed Build artifacts across machines",
+    )
+    installed_parser.add_argument("action", choices=["publish", "pull"], help="Sync action")
+    installed_parser.add_argument("--dry-run", action="store_true", help="simulate changes without writing")
+    installed_parser.add_argument("--publish-root-path", required=True, help="Shared root for published build artifacts")
+    installed_parser.add_argument("--build-id", required=True, help="Versioned build id (example: UE_5.7.2)")
+    installed_parser.add_argument("--thread-count", type=int, default=32, help="Robocopy thread count (default: 32)")
+
+    installed_parser.add_argument("--source-installed-build-path", help="Source installed build path for publish")
+    installed_parser.add_argument("--unreal-source-path", help="Unreal source clone path for commit metadata")
+    installed_parser.add_argument("--shared-ddc-path", help="Shared DDC path to store in build settings payload")
+    installed_parser.add_argument(
+        "--engine-association-guid",
+        help="EngineAssociation GUID to store in build settings payload",
+    )
+
+    installed_parser.add_argument("--destination-installed-build-path", help="Destination path for pull")
+    installed_parser.add_argument(
+        "--no-install-settings",
+        action="store_false",
+        dest="install_settings",
+        help="Do not apply pulled settings to local machine",
+    )
+    installed_parser.add_argument(
+        "--apply-engine-association",
+        action="store_true",
+        help="Apply EngineAssociation GUID mapping from build settings on pull",
+    )
+    installed_parser.add_argument("--json", metavar="PATH", help="write machine-readable JSON output")
+    installed_parser.set_defaults(install_settings=True)
+
     return parser
 
 
@@ -229,6 +264,71 @@ def handle_verify(args: argparse.Namespace) -> int:
     if args.json:
         write_json(scan, args.json)
     return 0
+
+
+def _emit_installed_result(result, json_path: str | None) -> int:
+    print(result.summary)
+    for detail in result.details:
+        print(detail)
+    for warning in result.warnings:
+        print(f"[warn] {warning}")
+    if result.changed_paths:
+        print("Changed paths:")
+        for path in result.changed_paths:
+            print(f"- {path}")
+    if json_path:
+        payload = {
+            "success": result.success,
+            "summary": result.summary,
+            "details": result.details,
+            "warnings": result.warnings,
+            "changed_paths": [str(path) for path in result.changed_paths],
+        }
+        Path(json_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(json_path).write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        print(f"Wrote JSON result: {json_path}")
+    return 0 if result.success else 1
+
+
+def handle_installed_build(args: argparse.Namespace) -> int:
+    publish_root = Path(args.publish_root_path).expanduser()
+    build_id = args.build_id
+    thread_count = max(1, int(args.thread_count))
+    dry_run = bool(args.dry_run)
+
+    if args.action == "publish":
+        if not args.source_installed_build_path:
+            print("--source-installed-build-path is required for action=publish")
+            return 2
+        result = publish_installed_build(
+            source_installed_build_path=Path(args.source_installed_build_path).expanduser(),
+            publish_root_path=publish_root,
+            build_id=build_id,
+            unreal_source_path=Path(args.unreal_source_path).expanduser() if args.unreal_source_path else None,
+            shared_ddc_path=args.shared_ddc_path,
+            engine_association_guid=args.engine_association_guid,
+            thread_count=thread_count,
+            dry_run=dry_run,
+        )
+        return _emit_installed_result(result, getattr(args, "json", None))
+
+    if args.action == "pull":
+        if not args.destination_installed_build_path:
+            print("--destination-installed-build-path is required for action=pull")
+            return 2
+        result = pull_installed_build(
+            publish_root_path=publish_root,
+            build_id=build_id,
+            destination_installed_build_path=Path(args.destination_installed_build_path).expanduser(),
+            thread_count=thread_count,
+            dry_run=dry_run,
+            install_settings=bool(args.install_settings),
+            apply_engine_association=bool(args.apply_engine_association),
+        )
+        return _emit_installed_result(result, getattr(args, "json", None))
+
+    print(f"Unknown installed-build action: {args.action}")
+    return 2
 
 
 def _prompt_bool_cli(prompt: str, default: bool = True) -> bool:
@@ -672,6 +772,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return handle_fix(args)
             if args.command == "setup":
                 return handle_setup(args)
+            if args.command == "installed-build":
+                return handle_installed_build(args)
             parser.error("Unknown command")
             return 1
     except SingleInstanceError as err:

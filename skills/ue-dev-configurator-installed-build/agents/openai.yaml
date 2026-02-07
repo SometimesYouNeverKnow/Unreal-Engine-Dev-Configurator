@@ -1,0 +1,4 @@
+interface:
+  display_name: "UE Installed Build Sync"
+  short_description: "Deterministic UE installed build workflow"
+  default_prompt: "Use $ue-dev-configurator-installed-build to pin Unreal Engine, run preflight checks, and produce a repeatable Installed Build path for CI."
